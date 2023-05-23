@@ -1,0 +1,5 @@
+#! /bin/bash
+
+export GRPC_INSTALL_DIR=/daqfs/gRPC/installation
+export PATH="$GRPC_INSTALL_DIR/bin:$PATH"
+export LD_LIBRARY_PATH="$GRPC_INSTALL_DIR/lib:$LD_LIBRARY_PATH"
