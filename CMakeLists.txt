@@ -51,22 +51,21 @@ set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
 set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
 message(STATUS "_PROTOBUF_PROTOC = ${_PROTOBUF_PROTOC}")
 
+if (NOT DEFINED ENV{GRPC_INSTALL_DIR})
+    message(FATAL_ERROR "Define GRPC_INSTALL_DIR so gRPC libs and includes can be found")
+endif()
+set(GRPC_INSTALL_DIR $ENV{GRPC_INSTALL_DIR})
+message(STATUS "set GRPC_INSTALL_DIR = ${GRPC_INSTALL_DIR}")
+
 # Find gRPC installation
 # Looks for gRPCConfig.cmake file installed by gRPC's cmake installation.
-find_package(gRPC CONFIG REQUIRED)
+find_package(gRPC REQUIRED CONFIG PATHS ${GRPC_INSTALL_DR}/lib/cmake/grpc)
 message(STATUS "Using gRPC ${gRPC_VERSION}")
 
 set(_REFLECTION gRPC::grpc++_reflection)
 set(_GRPC_GRPCPP gRPC::grpc++)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
 
-
-if (NOT DEFINED ENV{GRPC_INSTALL_DIR})
-    message(FATAL_ERROR "Define GRPC_INSTALL_DIR so gRPC libs and includes can be found")
-endif()
-
-
-set(GRPC_INSTALL_DIR $ENV{GRPC_INSTALL_DIR})
 
 # Installation directory may be defined on command line with -DINSTALL_DIR=<...>
 if (NOT DEFINED INSTALL_DIR)
@@ -127,7 +126,8 @@ add_library(ejfat_grpc SHARED
 target_link_libraries(ejfat_grpc
         ${_REFLECTION}
         ${_GRPC_GRPCPP}
-        ${_PROTOBUF_LIBPROTOBUF})
+        ${_PROTOBUF_LIBPROTOBUF}
+        )
 
 
 set(GRPC_EXEC_FILES
