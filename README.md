@@ -1,4 +1,4 @@
-# gRPC C++ EJFAT Load Balancer Backend
+# gRPC C++ ERSAP's EJFAT Backend
 
 ### library
 
@@ -41,10 +41,20 @@ be modified in the future.
 
 ### compiling
 
-To set things up, modify the setupgrpc bash file to set GRPC_INSTALL_DIR to the local installation
-of necessary grpc libs and includes. Do the following:
+The C++ distribution of grpc must be grabbed from github and built by hand, see:
+https://github.com/grpc/grpc/blob/v1.55.0/BUILDING.md
 
->**setupgrpc  
+Once compiled, install it in a directory that you specify in GRPC_INSTALL_DIR
+There are couple things to know. Grpc's cmake config file will be in the
+$GRPC_INSTALL_DIR/lib/cmake/grpc directory. This is what cmake will look for.
+The other thing is to use the version of protoc that you get with the grpc installation.
+Thus, put that in your path. This is what the script setupgrpc helps with.
+Just edit it to set GRPC_INSTALL_DIR to the local installation of grpc,
+and make any changes relevant to the operating system being used.
+
+Do the following:
+
+>**source setupgrpc  
 mkdir -p cmake/build  
 cd cmake/build  
 cmake ../..  
