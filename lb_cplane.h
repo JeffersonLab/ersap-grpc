@@ -41,13 +41,13 @@
 #include <chrono>
 #include <time.h>
 #include <unistd.h>
-
 #include <sys/types.h>
 
+#ifdef __APPLE__
+    #include <sys/sysctl.h>
+#endif
+
 #include <google/protobuf/util/time_util.h>
-
-
-
 
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include <grpcpp/grpcpp.h>
