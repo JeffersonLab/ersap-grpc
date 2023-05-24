@@ -3,7 +3,7 @@
 # source this script:
 #    source setupgrpc
 
-export GRPC_INSTALL_DIR=/daqfs/gRPC/installation
+setenv GRPC_INSTALL_DIR /daqfs/gRPC/installation
 #setenv GRPC_INSTALL_DIR /Users/timmer/coda/grpc_installation
 
 # Want to pick up the correct protoc - the one installed with grpc
