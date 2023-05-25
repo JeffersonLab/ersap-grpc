@@ -44,9 +44,9 @@ be modified in the future.
 The C++ distribution of grpc must be grabbed from github and built by hand, see:
 https://github.com/grpc/grpc/blob/v1.55.0/BUILDING.md
 
-Once compiled, install it in a directory that you specify in GRPC_INSTALL_DIR
+Once grpc is compiled, install it in a directory that you specify in GRPC_INSTALL_DIR
 There are couple things to know. Grpc's cmake config file will be in the
-$GRPC_INSTALL_DIR/lib/cmake/grpc directory. This is what cmake will look for.
+$GRPC_INSTALL_DIR/lib/cmake/grpc directory. This is what erssap-grpc's cmake will look for.
 The other thing is to use the version of protoc that you get with the grpc installation.
 Thus, put that in your path. This is what the script setupgrpc helps with.
 Just edit it to set GRPC_INSTALL_DIR to the local installation of grpc,
