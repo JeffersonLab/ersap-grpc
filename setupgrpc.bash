@@ -25,7 +25,7 @@ if test -n "${LD_LIBRARY_PATH-}"; then
   export LD_LIBRARY_PATH=$GRPC_INSTALL_DIR/lib:$LD_LIBRARY_PATH
 else
   export LD_LIBRARY_PATH=$GRPC_INSTALL_DIR/lib
-endif
+fi
 
 echo "LD_LIBRARY_PATH is <$LD_LIBRARY_PATH>"
 
