@@ -93,7 +93,7 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v]",
             "        [-p <data receiving port (for registration)>]",
@@ -103,8 +103,9 @@ static void printHelp(char *programName) {
             "        [-cp_port <control plane port>]",
             "        [-name <backend name>]",
             "        [-id <backend id#>]",
-            "        [-inrate <fill fifo Hz>]",
-            "        [-outrate <drain fifo Hz>]",
+            "        [-in_rate <fill fifo Hz>]",
+            "        [-out_rate <drain fifo Hz>]",
+            "        [-fifo <fifo size>]",
             "        [-s <PID fifo set point>]");
 
     fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a simulated control plane.\n");
@@ -124,7 +125,8 @@ static void printHelp(char *programName) {
  * @param range         filled with range of ports in powers of 2 (entropy).
  * @param listenAddr    filled with IP address to listen on for LB data.
  * @param inrate        filled with mean fifo fill rate in Hz.
- * @param outrate       filled with mean ifo drain rate in Hz.
+ * @param outrate       filled with mean fifo drain rate in Hz.
+ * @param fifoSize      filled with max fifo size.
  * @param debug         filled with debug flag.
  * @param cpAddr        filled with grpc server (control plane) IP address to info to.
  * @param clientName    filled with name of this grpc client (backend) to send to control plane.
@@ -132,7 +134,7 @@ static void printHelp(char *programName) {
 static void parseArgs(int argc, char **argv,
                       uint32_t *clientId, float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range, char *listenAddr,
-                      uint32_t *inrate, uint32_t *outrate,
+                      uint32_t *inrate, uint32_t *outrate, uint32_t *fifoSize,
                       bool *debug, char *cpAddr, char *clientName) {
 
     int c, i_tmp;
@@ -146,8 +148,9 @@ static void parseArgs(int argc, char **argv,
                           {"name",  1, NULL, 6},
                           {"id",  1, NULL, 7},
                           {"range",  1, NULL, 8},
-                          {"inrate",  1, NULL, 1},
-                          {"outrate",  1, NULL, 2},
+                          {"in_rate",  1, NULL, 1},
+                          {"out_rate",  1, NULL, 2},
+                          {"fifo",  1, NULL, 3},
                           {0,       0, 0,    0}
             };
 
@@ -189,7 +192,7 @@ static void parseArgs(int argc, char **argv,
                     *inrate = i_tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -inrate, 1 < rate <= 100k\n\n");
+                    fprintf(stderr, "Invalid argument to -in_rate, 0 < rate <= 100k\n\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
@@ -202,7 +205,20 @@ static void parseArgs(int argc, char **argv,
                     *outrate = i_tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -outrate, 1 < rate <= 100k\n\n");
+                    fprintf(stderr, "Invalid argument to -out_rate, 0 < rate <= 100k\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                break;
+
+            case 3:
+                // max fifo size
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 0 && i_tmp < 100001) {
+                    *fifoSize = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -fifo, 0 < size <= 100k\n\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
@@ -479,7 +495,7 @@ int main(int argc, char **argv) {
     int range;
     uint16_t port = 7777;
 
-    uint32_t inRate, outRate;
+    uint32_t inRate=16000, outRate=16000, fifoSize = 4000;
 
     char cpAddr[16];
     memset(cpAddr, 0, 16);
@@ -492,7 +508,7 @@ int main(int argc, char **argv) {
     memset(listeningAddr, 0, 16);
 
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
-              listeningAddr, &inRate, & outRate, &debug, cpAddr,  clientName);
+              listeningAddr, &inRate, &outRate, &fifoSize, &debug, cpAddr,  clientName);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -513,9 +529,9 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    targ->avgInsertionRate = inRate; // Hz
-    targ->avgDrainRate = outRate;    // Hz
-    targ->maxFifoLevel = 3;          // 4000 default
+    targ->avgInsertionRate = inRate; // 16000 Hz default
+    targ->avgDrainRate = outRate;    // 16000 Hz
+    targ->maxFifoLevel = fifoSize;   // 4000 default
     targ->debug = debug;
 
     pthread_t thdFill;
