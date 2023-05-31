@@ -102,6 +102,9 @@ add_custom_command(
 )
 
 set(HEADER_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ejfat_packetize.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ejfat_assemble_ersap.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         ${hw_proto_hdrs} ${hw_grpc_hdrs}
         )
@@ -132,6 +135,7 @@ target_link_libraries(ejfat_grpc
 
 set(GRPC_EXEC_FILES
         cp_tester.cc
+        packetBlaster.cc
         )
 
 
