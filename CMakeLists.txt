@@ -135,7 +135,7 @@ target_link_libraries(ejfat_grpc
 
 set(GRPC_EXEC_FILES
         cp_tester.cc
-        packetBlaster.cc
+        simSender.cc
         )
 
 
