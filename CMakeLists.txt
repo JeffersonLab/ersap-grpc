@@ -51,6 +51,17 @@ set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
 set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
 message(STATUS "_PROTOBUF_PROTOC = ${_PROTOBUF_PROTOC}")
 
+if (NOT DEFINED ENV{GRPC_INSTALL_DIR})
+    if (NOT DEFINED ENV{EJFAT_ERSAP_INSTALL_DIR})
+        message(FATAL_ERROR "Define GRPC_INSTALL_DIR or EJFAT_ERSAP_INSTALL_DIR so gRPC package can be found")
+    else()
+        set(GRPC_INSTALL_DIR $ENV{EJFAT_ERSAP_INSTALL_DIR})
+    endif()
+else()
+    set(GRPC_INSTALL_DIR $ENV{GRPC_INSTALL_DIR})
+endif()
+message(STATUS "set GRPC_INSTALL_DIR = ${GRPC_INSTALL_DIR}")
+
 # Find gRPC installation
 # Looks for gRPCConfig.cmake file installed by gRPC's cmake installation.
 find_package(gRPC REQUIRED CONFIG PATHS ${GRPC_INSTALL_DR}/lib/cmake/grpc)
@@ -59,7 +70,6 @@ message(STATUS "Using gRPC ${gRPC_VERSION}")
 set(_REFLECTION gRPC::grpc++_reflection)
 set(_GRPC_GRPCPP gRPC::grpc++)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
-
 
 # Installation directory may be defined on command line with -DINSTALL_DIR=<...>
 if (NOT DEFINED INSTALL_DIR)
@@ -105,9 +115,6 @@ set(HEADER_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         ${hw_proto_hdrs} ${hw_grpc_hdrs}
         )
-
-
-message(STATUS "GRPC_INSTALL_DIR = $ENV{GRPC_INSTALL_DIR}")
 
 
 # Include generated *.pb.h files
