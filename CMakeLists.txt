@@ -69,9 +69,12 @@ set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
 
 # Installation directory may be defined on command line with -DINSTALL_DIR=<...>
 if (NOT DEFINED INSTALL_DIR)
-    set(INSTALL_DIR ${GRPC_INSTALL_DIR})
+    if (NOT DEFINED ENV{EJFAT_ERSAP_INSTALL_DIR})
+        message(FATAL_ERROR "Use either -DINSTALL_DIR=<dir> or define EJFAT_ERSAP_INSTALL_DIR for installation")
+    else()
+        set(INSTALL_DIR $ENV{EJFAT_ERSAP_INSTALL_DIR})
+    endif()
 endif()
-set(GRPC_INCLUDE_DIRS ${GRPC_INSTALL_DIR}/include)
 
 message(STATUS "Installing into " ${INSTALL_DIR})
 set(INSTALL_DIR_DEFINED 1)
