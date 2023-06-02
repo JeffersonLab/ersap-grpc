@@ -375,7 +375,7 @@ static void *fillFifoThread(void *arg) {
     // std::uniform_real_distribution<> d(0.0, 1.0);
 
     // Gaussian, mean = avg delay, std dev = 5% of mean
-    std::normal_distribution<int> g(meanDelay, stdDev);
+    std::normal_distribution<float> g(meanDelay, stdDev);
 
     while (true) {
         // Grab mutex
@@ -446,7 +446,7 @@ static void *drainFifoThread(void *arg) {
     // std::uniform_real_distribution<> d(0.0, 1.0);
 
     // Gaussian, mean = avg delay, std dev = 5% of mean
-    std::normal_distribution<int> g(meanDelay, stdDev);
+    std::normal_distribution<float> g(meanDelay, stdDev);
 
     while (true) {
         // Grab mutex
