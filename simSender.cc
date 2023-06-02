@@ -103,7 +103,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                       uint64_t *bufSize, uint64_t *bufRate,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
-                      uint32_t *time, uint32_t *timeWidth, unint32_t sizeWidth,
+                      uint32_t *time, uint32_t *timeWidth, uint32_t *sizeWidth,
                       int *cores,
                       bool *debug,
                       bool *useIPv6, bool *bufDelay, bool *sendSync,
@@ -426,7 +426,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 }
                 break;
 
-            case 17:
+            case 18:
                 // Size width - gaussian width of buf size,
                 // centered on size given by -b option
                 tmp = strtol(optarg, nullptr, 0);
