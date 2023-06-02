@@ -1,5 +1,5 @@
 //
-// Copyright 2022, Jefferson Science Associates, LLC.
+// Copyright 2023, Jefferson Science Associates, LLC.
 // Subject to the terms in the LICENSE file found in the top-level directory.
 //
 // EPSCI Group
@@ -9,18 +9,33 @@
 
 
 /**
+ * @file
  * <p>
- * @file Send a single data buffer (full of random data) repeatedly
- * to an ejfat router (FPGA-based or simulated) which then passes it
- * to the receiving program packetBlastee.cc.
+ * Send test data buffers repeatedly to an ejfat router which then passes it
+ * to the simulated backend program cp_tester.cc. This uses the new, version 2,
+ * RE header.
  * </p>
- * Look on Carl Timmer's Mac at /Users/timmer/DataGraphs/NumaNodes.xlsx in order see results
- * of a study of the ejfat nodes at Jefferson Lab, 100Gb network.
- * To produce events at roughly 2.9GB/s, use arg "-cores 60" where 60 can just as
- * easily be 0-63. To produce at roughly 3.4 GB/s, use cores 64-79, 88-127.
- * To produce at 4.7 GB/s, use cores 80-87. (Notices cores # start at 0).
- * The receiver, packetBlasteeNew2 will be able to receive all data sent at
- * 3 GB/s, any more than that and it starts dropping packets.
+ *
+ * <p>
+ * The buf size can be given on the cmd line.
+ * It can be set exactly to that value, or may be a gaussian dist
+ * around that value. Same thing with buffer send rate.
+ * Encoded in the data is:
+ * <ol>
+ * <li>Number of microseconds to take for the simulated processing
+ *     of reassembled buffer on the receiving end, unsigned 4-byte int in network byte order</li>
+ * <li>1 byte containing total # of packets comprising buf</li>
+ * <li>As the buf is packetized, the next byte of the first packet (#1) is filled with 1.
+ *     The first byte of the payloads of other packets is 2, 3, 4, etc.
+ * </ol>
+ * </p>
+ *
+ * <p>
+ * Note that certain command line options are incompatible.
+ * One cannot set a delay (-d) and also try to set the buffer rate (-bufrate)
+ * or byte rate (-byterate).
+ *
+ * </p>
  */
 
 
@@ -52,10 +67,12 @@ using namespace ejfat;
 
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v] [-ip6] [-sync]",
+            "        [-h] [-v] [-ip6] [-sync] [-twidth] [-swidth]",
             "        [-bufdelay] (delay between each buffer, not packet)",
+            "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]",
+            "        [-time <microsec for receiver to delay to simulate processing>]",
             "        [-host <destination host (defaults to 127.0.0.1)>]",
             "        [-p <destination UDP port>]",
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
@@ -65,14 +82,13 @@ static void printHelp(char *programName) {
             "        [-id <data id>]",
             "        [-pro <protocol>]",
             "        [-e <entropy>]",
-            "        [-b <buffer size, 1MB default>]",
+            "        [-b <buffer size, 2MB max, 62.5kB default>]",
             "        [-bufrate <buffers sent per sec>]",
             "        [-byterate <bytes sent per sec>]",
             "        [-s <UDP send buffer size>]",
             "        [-cores <comma-separated list of cores to run on>]",
             "        [-tpre <tick prescale (1,2, ... tick increment each buffer sent)>]",
-            "        [-dpre <delay prescale (1,2, ... if -d defined, 1 delay for every prescale pkts/bufs)>]",
-            "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]");
+            "        [-dpre <delay prescale (1,2, ... if -d defined, 1 delay for every prescale pkts/bufs)>]");
 
     fprintf(stderr, "        EJFAT UDP packet sender that will packetize and send buffer repeatedly and get stats\n");
     fprintf(stderr, "        By default, data is copied into buffer and \"send()\" is used (connect is called).\n");
@@ -87,6 +103,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                       uint64_t *bufSize, uint64_t *bufRate,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
+                      uint32_t *time, uint32_t *timeWidth, unint32_t sizeWidth,
                       int *cores,
                       bool *debug,
                       bool *useIPv6, bool *bufDelay, bool *sendSync,
@@ -112,6 +129,9 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
              {"cores",  1, NULL, 13},
              {"bufrate",  1, NULL, 14},
              {"byterate",  1, NULL, 15},
+             {"time",  1, NULL, 16},
+             {"twidth",  1, NULL, 17},
+             {"swidth",  1, NULL, 18},
              {0,       0, 0,    0}
             };
 
@@ -150,11 +170,14 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
             case 'b':
                 // BUFFER SIZE
                 tmp = strtol(optarg, nullptr, 0);
-                if (tmp >= 500) {
+                if (tmp > 2000000) {
+                    *bufSize = 2000000;
+                }
+                else if (tmp >= 500) {
                     *bufSize = tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -b, buf size >= 500\n");
+                    fprintf(stderr, "Invalid argument to -b, buf size >= 500 and <= 2MB\n");
                     exit(-1);
                 }
                 break;
@@ -290,40 +313,6 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 *bufDelay = true;
                 break;
 
-            case 14:
-                // Buffers to be sent per second
-                if (*byteRate > 0) {
-                    fprintf(stderr, "Cannot specify bufrate if byterate already specified\n");
-                    exit(-1);
-                }
-
-                tmp = strtol(optarg, nullptr, 0);
-                if (tmp > 0) {
-                    *bufRate = tmp;
-                }
-                else {
-                    fprintf(stderr, "Invalid argument to -bufrate, bufrate > 0\n");
-                    exit(-1);
-                }
-                break;
-
-            case 15:
-                // Bytes to be sent per second
-                if (*bufRate > 0) {
-                    fprintf(stderr, "Cannot specify byterate if bufrate already specified\n");
-                    exit(-1);
-                }
-
-                tmp = strtol(optarg, nullptr, 0);
-                if (tmp > 0) {
-                    *byteRate = tmp;
-                }
-                else {
-                    fprintf(stderr, "Invalid argument to -byterate, byterate > 0\n");
-                    exit(-1);
-                }
-                break;
-
             case 13:
                 // Cores to run on
                 if (strlen(optarg) < 1) {
@@ -374,6 +363,79 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                         index++;
                         //std::cout << s << std::endl;
                     }
+                }
+                break;
+
+            case 14:
+                // Buffers to be sent per second
+                if (*byteRate > 0) {
+                    fprintf(stderr, "Cannot specify bufrate if byterate already specified\n");
+                    exit(-1);
+                }
+
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp > 0) {
+                    *bufRate = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -bufrate, bufrate > 0\n");
+                    exit(-1);
+                }
+                break;
+
+            case 15:
+                // Bytes to be sent per second
+                if (*bufRate > 0) {
+                    fprintf(stderr, "Cannot specify byterate if bufrate already specified\n");
+                    exit(-1);
+                }
+
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp > 0) {
+                    *byteRate = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -byterate, byterate > 0\n");
+                    exit(-1);
+                }
+                break;
+
+            case 16:
+                // Time in microsec for receiver (simulated backend)
+                // to delay for simulated data processing.
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp >= 0) {
+                    *time = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -time, time >= 0\n");
+                    exit(-1);
+                }
+                break;
+
+            case 17:
+                // Time width - gaussian width of times for receiver to delay,
+                // centered on time given by -time option
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp >= 0) {
+                    *timeWidth = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -twidth, time width >= 0\n");
+                    exit(-1);
+                }
+                break;
+
+            case 17:
+                // Size width - gaussian width of buf size,
+                // centered on size given by -b option
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp >= 0) {
+                    *sizeWidth = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -swidth, size width >= 0\n");
+                    exit(-1);
                 }
                 break;
 
@@ -502,6 +564,7 @@ static void *thread(void *arg) {
  */
 int main(int argc, char **argv) {
 
+    uint32_t beDelayTime = 0, timeWidth = 0, sizeWidth = 0;
     uint32_t tickPrescale = 1;
     uint32_t delayPrescale = 1, delayCounter = 0;
     uint32_t offset = 0, sendBufSize = 0;
@@ -516,6 +579,7 @@ int main(int argc, char **argv) {
     bool useIPv6 = false, bufDelay = false;
     bool setBufRate = false, setByteRate = false;
     bool sendSync = false;
+    bool useSizeSpread = false, useTimeSpread = false;
 
     char syncBuf[28];
     char host[INPUT_LENGTH_MAX], interface[16];
@@ -529,7 +593,7 @@ int main(int argc, char **argv) {
 
     parseArgs(argc, argv, &mtu, &protocol, &entropy, &version, &dataId, &port, &tick,
               &delay, &bufSize, &bufRate, &byteRate, &sendBufSize,
-              &delayPrescale, &tickPrescale, cores, &debug,
+              &delayPrescale, &tickPrescale, &beDelayTime, &timeWidth, &sizeWidth, cores, &debug,
               &useIPv6, &bufDelay, &sendSync, host, interface);
 
 #ifdef __linux__
@@ -568,19 +632,33 @@ int main(int argc, char **argv) {
     fprintf(stderr, "send = %s\n", btoa(send));
 
     if (bufDelay) {
+        // Delay between buffers?
         packetDelay = 0;
         bufferDelay = delay;
     }
     else {
+        // Delay between packets?
         packetDelay = delay;
         bufferDelay = 0;
     }
 
     if (byteRate > 0) {
+        // Are we trying to send a fixed byte rate?
         setByteRate = true;
     }
     else if (bufRate > 0) {
+        // Are we trying to send a fixed buffer rate?
         setBufRate = true;
+    }
+
+    // Do we use gaussian distribution of simulated BE processing times?
+    if (timeWidth > 0) {
+        useTimeSpread = true;
+    }
+
+    // Do we use gaussian distribution of buffer sizes?
+    if (sizeWidth > 0) {
+        useSizeSpread = true;
     }
 
     // Break data into multiple packets of max MTU size.
