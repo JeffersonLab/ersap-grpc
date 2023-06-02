@@ -51,12 +51,6 @@ set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
 set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
 message(STATUS "_PROTOBUF_PROTOC = ${_PROTOBUF_PROTOC}")
 
-if (NOT DEFINED ENV{GRPC_INSTALL_DIR})
-    message(FATAL_ERROR "Define GRPC_INSTALL_DIR so gRPC libs and includes can be found")
-endif()
-set(GRPC_INSTALL_DIR $ENV{GRPC_INSTALL_DIR})
-message(STATUS "set GRPC_INSTALL_DIR = ${GRPC_INSTALL_DIR}")
-
 # Find gRPC installation
 # Looks for gRPCConfig.cmake file installed by gRPC's cmake installation.
 find_package(gRPC REQUIRED CONFIG PATHS ${GRPC_INSTALL_DR}/lib/cmake/grpc)
