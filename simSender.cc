@@ -48,7 +48,7 @@
 #include <cinttypes>
 #include <random>
 
-#include "ejfat_packetize.hpp"
+#include "ersap_grpc_packetize.hpp"
 
 #ifdef __linux__
 #ifndef _GNU_SOURCE
@@ -944,18 +944,6 @@ int main(int argc, char **argv) {
             buffersAtOnce = 500000 / bufSize;
             if (buffersAtOnce  < 1) buffersAtOnce = 1;
             bytesToWriteAtOnce = buffersAtOnce * bufSize;
-
-            free(buf);
-            buf = (char *) malloc(bufSize);
-            if (buf == nullptr) {
-                fprintf(stderr, "cannot allocate internal buffer memory of %" PRIu64 " bytes\n", bufSize);
-                return -1;
-            }
-
-            uint32_t *pp = reinterpret_cast<uint32_t *>(buf);
-            for (uint32_t i=0; i < bufSize/4; i++) {
-                pp[i] = i;
-            }
         }
         else {
             // Fixed the BUFFER rate since data rates may vary between data sources, but

@@ -1,5 +1,5 @@
 //
-// Copyright 2022, Jefferson Science Associates, LLC.
+// Copyright 2023, Jefferson Science Associates, LLC.
 // Subject to the terms in the LICENSE file found in the top-level directory.
 //
 // EPSCI Group
@@ -10,13 +10,21 @@
 
 
 /**
- * @file Contains routines to packetize (break into smaller UDP packets)
- * a buffer, adding header information that will direct it to and through
- * a special FPGA router. These packets will eventually be received at a given
- * UDP destination equipped to reassemble it.
+ * @file
+ * Contains routines to create packets, fill them with data including 2 headers
+ * that will direct it to and through a special FPGA router.
+ * These packets will eventually be received at a given UDP destination equipped
+ * to reassemble it with help of the 2nd, reassembly, header.<p>
+ *
+ * The main purpose of this header is to support the applications that simulate
+ * an environment of sending data to a backend which will reassemble the data and
+ * wait for a delay specified by the sender in order to simulate data processing.
+ * This simulated backend will communicate to a Load Balancer's control plane,
+ * or alternatively to a simulated CP. Note that the sender talks to the control
+ * plane as well, telling it the most recent tick/event sent in the last second.
  */
-#ifndef EJFAT_PACKETIZE_ERSAP_GRPC_H
-#define EJFAT_PACKETIZE_ERSAP_GRPC_H
+#ifndef ERSAP_GRPC_PACKETIZE_H
+#define ERSAP_GRPC_PACKETIZE_H
 
 
 
@@ -333,8 +341,8 @@ namespace ejfat {
      * In each pkt we send the:
      * <ol>
      * <li>backend "processing time" in millisec (4 bytes).
-     * <li>packet sequence (1,2,3, ...)
      * <li>total number of pkts for this buffer
+     * <li>packet sequence (1,2,3, ...)
      * <li>junk data
      * </ol>
      * </p>
@@ -391,7 +399,7 @@ namespace ejfat {
 
         // Write data that does not change only once
         data[0] = ntohl(backendTime);
-        data[2] = ntohl(totalPackets);
+        data[1] = ntohl(totalPackets);
 
 
         while (remainingPackets-- > 0) {
@@ -402,7 +410,7 @@ namespace ejfat {
             setReMetadata(buffer + LB_HEADER_BYTES, localOffset, dataLen, tick, version, dataId);
 
             // Write data that changes with each packet
-            data[1] = ntohl(++packetCounter);
+            data[2] = ntohl(++packetCounter);
 
             // Send packet to receiver
             if (debug) fprintf(stderr, "Send %u bytes\n", bytesToWrite);
@@ -443,4 +451,4 @@ namespace ejfat {
 }
 
 
-#endif // EJFAT_PACKETIZE_ERSAP_GRPC_H
+#endif // ERSAP_GRPC_PACKETIZE_H

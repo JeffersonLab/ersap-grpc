@@ -140,6 +140,7 @@ target_link_libraries(ejfat_grpc
 set(GRPC_EXEC_FILES
         cp_tester.cc
         simSender.cc
+        control_plane_server.cc
         )
 
 
