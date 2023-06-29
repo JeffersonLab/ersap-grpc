@@ -17,8 +17,8 @@
  * to reassemble buffers assume the new, version 2, RE headers. The code to reassemble the
  * older style RE header is still included but commented out.
  */
-#ifndef EJFAT_ASSEMBLE_ERSAP_H
-#define EJFAT_ASSEMBLE_ERSAP_H
+#ifndef EJFAT_ASSEMBLE_ERSAP_GRPC_H
+#define EJFAT_ASSEMBLE_ERSAP_GRPC_H
 
 
 #include <cstdio>
@@ -3314,4 +3314,4 @@ static inline uint64_t bswap_64(uint64_t x) {
     }
 
 
-#endif // EJFAT_ASSEMBLE_ERSAP_H
+#endif // EJFAT_ASSEMBLE_ERSAP_GRPC_H

@@ -20,13 +20,12 @@
  * The buf size can be given on the cmd line.
  * It can be set exactly to that value, or may be a gaussian dist
  * around that value. Same thing with buffer send rate.
- * Encoded in the data is:
+ * After the 2 headers (for LB and RE), encoded in the data, for each packet, is:
  * <ol>
  * <li>Number of microseconds to take for the simulated processing
  *     of reassembled buffer on the receiving end, unsigned 4-byte int in network byte order</li>
- * <li>1 byte containing total # of packets comprising buf</li>
- * <li>As the buf is packetized, the next byte of the first packet (#1) is filled with 1.
- *     The first byte of the payloads of other packets is 2, 3, 4, etc.
+ * <li>Seq of packet order (1,2,3 ..) for sending a buffer (4 byte int).
+ * <li>Total # of packets comprising buf (4 byte int) </li>
  * </ol>
  * </p>
  *
@@ -47,6 +46,8 @@
 #include <pthread.h>
 #include <iostream>
 #include <cinttypes>
+#include <random>
+
 #include "ejfat_packetize.hpp"
 
 #ifdef __linux__
@@ -67,71 +68,85 @@ using namespace ejfat;
 
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v] [-ip6] [-sync] [-twidth] [-swidth]",
-            "        [-bufdelay] (delay between each buffer, not packet)",
+            "        [-h] [-v] [-ip6] [-sync]\n",
+
             "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]",
+            "        [-bufdelay] (delay between each buffer, not packet)",
+            "        [-bufrate  <buffers per sec>]",
+            "        [-byterate <bytes per sec>]\n",
+
             "        [-time <microsec for receiver to delay to simulate processing>]",
+            "        [-twidth <microsec 1/2 width of gaussian for variable processing delay>]\n",
+
             "        [-host <destination host (defaults to 127.0.0.1)>]",
-            "        [-p <destination UDP port>]",
+            "        [-p <destination UDP port>]\n",
+
+            "        [-cphost <control plane host (defaults to 127.0.0.1)>]",
+            "        [-cpport <control plane UDP port>]\n",
+
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
             "        [-mtu <desired MTU size>]",
             "        [-t <tick>]",
             "        [-ver <version>]",
             "        [-id <data id>]",
             "        [-pro <protocol>]",
-            "        [-e <entropy>]",
+            "        [-e <entropy>]\n",
+
             "        [-b <buffer size, 2MB max, 62.5kB default>]",
-            "        [-bufrate <buffers sent per sec>]",
-            "        [-byterate <bytes sent per sec>]",
-            "        [-s <UDP send buffer size>]",
+            "        [-bwidth <byte 1/2 width of gaussian for variable buffer size>]",
+            "        [-s <UDP send buffer size>]\n",
+
             "        [-cores <comma-separated list of cores to run on>]",
             "        [-tpre <tick prescale (1,2, ... tick increment each buffer sent)>]",
-            "        [-dpre <delay prescale (1,2, ... if -d defined, 1 delay for every prescale pkts/bufs)>]");
+            "        [-dpre <delay prescale (1,2, ... if -d defined, 1 delay for every prescale pkts/bufs)>]\n");
 
     fprintf(stderr, "        EJFAT UDP packet sender that will packetize and send buffer repeatedly and get stats\n");
     fprintf(stderr, "        By default, data is copied into buffer and \"send()\" is used (connect is called).\n");
-    fprintf(stderr, "        The -sync option will send a UDP message to LB every second with last tick sent.\n");
+    fprintf(stderr, "        If specifying twidth or bwidth, backend time and buf size (-time, -b) are mean values and must be > 0\n");
+    fprintf(stderr, "        The -sync option will send a UDP message to LB control plane every second with last tick sent.\n");
 }
 
 
 
 static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
-                      int *entropy, int *version, uint16_t *id, uint16_t* port,
+                      int *entropy, int *version,
+                      uint16_t *id, uint16_t* port, uint16_t* cpport,
                       uint64_t* tick, uint32_t* delay,
                       uint64_t *bufSize, uint64_t *bufRate,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
                       uint32_t *time, uint32_t *timeWidth, uint32_t *sizeWidth,
                       int *cores,
-                      bool *debug,
-                      bool *useIPv6, bool *bufDelay, bool *sendSync,
-                      char* host, char *interface) {
+                      bool *debug, bool *useIPv6, bool *bufDelay, bool *sendSync,
+                      char* host, char* cphost, char *interface) {
 
     *mtu = 0;
     int c, i_tmp;
     int64_t tmp;
     bool help = false;
 
-    /* 4 multiple character command-line options */
+    /* multiple character command-line options */
     static struct option long_options[] =
-            {{"mtu",   1, NULL, 1},
-             {"host",  1, NULL, 2},
-             {"ver",   1, NULL, 3},
-             {"id",    1, NULL, 4},
-             {"pro",   1, NULL, 5},
-             {"sync",   0, NULL, 6},
-             {"dpre",  1, NULL, 9},
-             {"tpre",  1, NULL, 10},
-             {"ipv6",  0, NULL, 11},
-             {"bufdelay",  0, NULL, 12},
-             {"cores",  1, NULL, 13},
+            {{"mtu",      1, NULL, 1},
+             {"host",     1, NULL, 2},
+             {"ver",      1, NULL, 3},
+             {"id",       1, NULL, 4},
+             {"pro",      1, NULL, 5},
+             {"sync",     0, NULL, 6},
+             {"dpre",     1, NULL, 9},
+             {"tpre",     1, NULL, 10},
+             {"ipv6",     0, NULL, 11},
+             {"bufdelay", 0, NULL, 12},
+             {"cores",    1, NULL, 13},
              {"bufrate",  1, NULL, 14},
-             {"byterate",  1, NULL, 15},
-             {"time",  1, NULL, 16},
-             {"twidth",  1, NULL, 17},
-             {"swidth",  1, NULL, 18},
+             {"byterate", 1, NULL, 15},
+             {"time",     1, NULL, 16},
+             {"twidth",   1, NULL, 17},
+             {"bwidth",   1, NULL, 18},
+             {"cphost",   1, NULL, 19},
+             {"cpport",   1, NULL, 20},
              {0,       0, 0,    0}
             };
 
@@ -163,6 +178,18 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 }
                 else {
                     fprintf(stderr, "Invalid argument to -p, 1023 < port < 65536\n");
+                    exit(-1);
+                }
+                break;
+
+            case 20:
+                // control plane PORT
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 1023 && i_tmp < 65535) {
+                    *cpport = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -cpport, 1023 < port < 65536\n");
                     exit(-1);
                 }
                 break;
@@ -242,6 +269,15 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                     exit(-1);
                 }
                 strcpy(host, optarg);
+                break;
+
+            case 19:
+                // control plane HOST
+                if (strlen(optarg) >= INPUT_LENGTH_MAX) {
+                    fprintf(stderr, "Invalid argument to -cphost, host name is too long\n");
+                    exit(-1);
+                }
+                strcpy(cphost, optarg);
                 break;
 
             case 3:
@@ -434,7 +470,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                     *sizeWidth = tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -swidth, size width >= 0\n");
+                    fprintf(stderr, "Invalid argument to -bwidth, byte width >= 0\n");
                     exit(-1);
                 }
                 break;
@@ -569,8 +605,8 @@ int main(int argc, char **argv) {
     uint32_t delayPrescale = 1, delayCounter = 0;
     uint32_t offset = 0, sendBufSize = 0;
     uint32_t delay = 0, packetDelay = 0, bufferDelay = 0;
-    uint64_t bufRate = 0L, bufSize = 0L, byteRate = 0L;
-    uint16_t port = 0x4c42; // FPGA port is default
+    uint64_t bufRate = 0L, bufSize = 62500L, byteRate = 0L;
+    uint16_t port = 0x4c42, cpport = 19523; // FPGA port is default, cp is one more
     uint64_t tick = 0;
     int cores[10];
     int mtu, version = 2, protocol = 1, entropy = 0;
@@ -582,19 +618,21 @@ int main(int argc, char **argv) {
     bool useSizeSpread = false, useTimeSpread = false;
 
     char syncBuf[28];
-    char host[INPUT_LENGTH_MAX], interface[16];
+    char host[INPUT_LENGTH_MAX], cphost[INPUT_LENGTH_MAX], interface[16];
     memset(host, 0, INPUT_LENGTH_MAX);
+    memset(cphost, 0, INPUT_LENGTH_MAX);
     memset(interface, 0, 16);
     strcpy(host, "127.0.0.1");
+    strcpy(cphost, "127.0.0.1");
     strcpy(interface, "lo0");
     for (int i=0; i < 10; i++) {
         cores[i] = -1;
     }
 
-    parseArgs(argc, argv, &mtu, &protocol, &entropy, &version, &dataId, &port, &tick,
+    parseArgs(argc, argv, &mtu, &protocol, &entropy, &version, &dataId, &port, &cpport, &tick,
               &delay, &bufSize, &bufRate, &byteRate, &sendBufSize,
               &delayPrescale, &tickPrescale, &beDelayTime, &timeWidth, &sizeWidth, cores, &debug,
-              &useIPv6, &bufDelay, &sendSync, host, interface);
+              &useIPv6, &bufDelay, &sendSync, host, cphost, interface);
 
 #ifdef __linux__
 
@@ -652,7 +690,7 @@ int main(int argc, char **argv) {
     }
 
     // Do we use gaussian distribution of simulated BE processing times?
-    if (timeWidth > 0) {
+    if (timeWidth > 0 && beDelayTime > 0) {
         useTimeSpread = true;
     }
 
@@ -679,9 +717,43 @@ int main(int argc, char **argv) {
     // https://stackoverflow.com/questions/42609561/udp-maximum-packet-size
     int maxUdpPayload = mtu - 20 - 8 - HEADER_BYTES;
 
-    // Create UDP socket
-    int clientSocket;
+    fprintf(stderr, "Setting max UDP payload size to %d bytes, MTU = %d\n", maxUdpPayload, mtu);
 
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // Create a variable backend processing time (gausssian around the given backend time)
+    uint32_t backendTime = beDelayTime;
+
+    // For generating random, distributed numbers
+    std::random_device rd;
+    std::mt19937 gen {rd()};
+
+    // Gaussian dist for times
+    std::normal_distribution<float> timeDist {(float)beDelayTime, (float)timeWidth};
+
+    // To use this to generate time:
+    // float r = timeDist(gen);
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // Determine size of data to send
+
+    // Create a variable event buffer size (gausssian around the given buf size)
+    uint32_t bufByteSize = bufSize;
+
+    // Gaussian dist for buffer sizes
+    std::normal_distribution<float> bufDist {(float)bufSize, (float)sizeWidth};
+
+    // To use this to generate size:
+    // float r = bufDist(gen);
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Create UDP sockets (one for control plane, the other for backend)
+    int cpSocket, clientSocket;
+
+    // Create socket to backend
     if (useIPv6) {
         struct sockaddr_in6 serverAddr6;
 
@@ -766,6 +838,68 @@ int main(int argc, char **argv) {
     }
 #endif
 
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    // Create socket to send tick/event# update to control plane. No need for big buffers.
+    if (sendSync) {
+        if (useIPv6) {
+            struct sockaddr_in6 serverAddr6;
+
+            /* create a DGRAM (UDP) socket in the INET/INET6 protocol */
+            if ((cpSocket = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
+                perror("creating IPv6 cp socket");
+                return -1;
+            }
+
+            socklen_t size = sizeof(int);
+
+            // Configure settings in address struct
+            // Clear it out
+            memset(&serverAddr6, 0, sizeof(serverAddr6));
+            // it is an INET address
+            serverAddr6.sin6_family = AF_INET6;
+            // the port we are going to send to, in network byte order
+            serverAddr6.sin6_port = htons(cpport);
+            // the server IP address, in network byte order
+            inet_pton(AF_INET6, cphost, &serverAddr6.sin6_addr);
+
+            int err = connect(cpSocket, (const sockaddr *) &serverAddr6, sizeof(struct sockaddr_in6));
+            if (err < 0) {
+                if (debug) perror("Error connecting UDP socket:");
+                close(cpSocket);
+                exit(1);
+            }
+        }
+        else {
+            struct sockaddr_in serverAddr;
+
+            // Create UDP socket
+            if ((cpSocket = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+                perror("creating IPv4 cp socket");
+                return -1;
+            }
+
+            // Configure settings in address struct
+            memset(&serverAddr, 0, sizeof(serverAddr));
+            serverAddr.sin_family = AF_INET;
+            //if (debug) fprintf(stderr, "Sending on UDP port %hu\n", lbPort);
+            serverAddr.sin_port = htons(cpport);
+            //if (debug) fprintf(stderr, "Connecting to host %s\n", lbHost);
+            serverAddr.sin_addr.s_addr = inet_addr(cphost);
+            memset(serverAddr.sin_zero, '\0', sizeof serverAddr.sin_zero);
+
+            fprintf(stderr, "Connection socket to host %s, port %hu\n", cphost, cpport);
+            int err = connect(cpSocket, (const sockaddr *) &serverAddr, sizeof(struct sockaddr_in));
+            if (err < 0) {
+                if (debug) perror("Error connecting UDP socket:");
+                close(cpSocket);
+                return err;
+            }
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     // Start thread to do rate printout
     pthread_t thd;
     int status = pthread_create(&thd, NULL, thread, (void *) nullptr);
@@ -774,29 +908,8 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    fprintf(stderr, "Setting max UDP payload size to %d bytes, MTU = %d\n", maxUdpPayload, mtu);
 
-    // To avoid having file reads contaminate our performance measurements,
-    // place some data into a buffer and repeatedly read it.
-    // For most efficient use of UDP packets, make our buffer a multiple of maxUdpPayload,
-    // roughly around 1MB.
-    if (bufSize == 0) {
-        bufSize = (1000000 / maxUdpPayload + 1) * maxUdpPayload;
-        fprintf(stderr, "internally setting buffer to %" PRIu64 " bytes\n", bufSize);
-    }
-
-    char *buf = (char *) malloc(bufSize);
-    if (buf == NULL) {
-        fprintf(stderr, "cannot allocate internal buffer memory of %" PRIu64 " bytes\n", bufSize);
-        return -1;
-    }
-
-    // write successive ints so we can check transmission on receiving end
-    uint32_t *p = reinterpret_cast<uint32_t *>(buf);
-    for (uint32_t i=0; i < bufSize/4; i++) {
-        p[i] = i;
-    }
-
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     int err;
     bool firstBuffer = true;
     bool lastBuffer  = true;
@@ -863,11 +976,14 @@ int main(int argc, char **argv) {
                 bytesToWriteAtOnce, byteRate, buffersAtOnce, microSecItShouldTake);
     }
 
+
     if (setByteRate || setBufRate || sendSync) {
         // Start the clock
         clock_gettime(CLOCK_MONOTONIC, &t1);
         tStart = t1;
     }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
     uint32_t evtRate;
     uint64_t bufsSent = 0UL;
@@ -911,11 +1027,20 @@ int main(int argc, char **argv) {
             countDown = buffersAtOnce - 1;
         }
 
-        err = sendPacketizedBufferSendNew(buf, bufSize, maxUdpPayload, clientSocket,
-                                              tick, protocol, entropy, version, dataId,
-                                              (uint32_t) bufSize, &offset,
-                                              packetDelay, delayPrescale, &delayCounter,
-                                              firstBuffer, lastBuffer, debug, &packetsSent);
+        // Generate spread in backend processing time
+        if (useTimeSpread) {
+            backendTime = (uint32_t) timeDist(gen);
+        }
+
+        // Generate spread in buffer size
+        if (useSizeSpread) {
+            bufByteSize = (uint32_t) bufDist(gen);
+        }
+
+        err = sendPacketizedBuf(bufByteSize, maxUdpPayload, backendTime, clientSocket,
+                                tick, protocol, entropy, version, dataId,
+                                packetDelay, delayPrescale, &delayCounter,
+                                debug, &packetsSent);
         if (err < 0) {
             // Should be more info in errno
             fprintf(stderr, "\nsendPacketizedBuffer: errno = %d, %s\n\n", errno, strerror(errno));
@@ -923,7 +1048,7 @@ int main(int argc, char **argv) {
         }
 
         bufsSent++;
-        totalBytes   += bufSize;
+        totalBytes   += bufByteSize;
         totalPackets += packetsSent;
         offset = 0;
         tick += tickPrescale;
@@ -940,7 +1065,7 @@ int main(int argc, char **argv) {
                 // Send sync message to same destination
 if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %u\n\n", tick, evtRate);
                 setSyncData(syncBuf, version, dataId, tick, evtRate, syncTime);
-                err = send(clientSocket, syncBuf, 28, 0);
+                err = send(cpSocket, syncBuf, 28, 0);
                 if (err == -1) {
                     fprintf(stderr, "\npacketBlasterNew: error sending sync, errno = %d, %s\n\n", errno, strerror(errno));
                     return (-1);
