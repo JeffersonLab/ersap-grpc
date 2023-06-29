@@ -14,7 +14,7 @@
 
 /**
  * @file
- * Send simulated requests/data to the control_plane_server program.
+ * Send simulated requests/data to the cp_server program (or real CP).
  * Behaves like an ERSAP backend.
  */
 
@@ -51,6 +51,7 @@
 
 // GRPC stuff
 #include "lb_cplane.h"
+#include "ersap_grpc_assemble.hpp"
 
 
 
@@ -83,9 +84,6 @@ static uint32_t fifoLevel;
 static std::mutex fifoMutex;
 static std::condition_variable fifoCV;
 
-//-----------------------------------------------------------------------
-// Be sure to print to stderr as this program pipes data to stdout!!!
-//-----------------------------------------------------------------------
 
 /**
  * Print out help.
@@ -93,22 +91,24 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v]",
+            "        [-h] [-v] [-ip6]",
             "        [-p <data receiving port (for registration)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
+
             "        [-cp_addr <control plane IP address>]",
             "        [-cp_port <control plane port>]",
+
             "        [-name <backend name>]",
             "        [-id <backend id#>]",
-            "        [-in_rate <fill fifo Hz>]",
-            "        [-out_rate <drain fifo Hz>]",
+
+            "        [-b <internal buf size to hold event>]",
             "        [-fifo <fifo size>]",
             "        [-s <PID fifo set point>]");
 
-    fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a simulated control plane.\n");
+    fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a control plane.\n");
     fprintf(stderr, "        The -p, -a, and -range args are only to tell CP where to send our data, but are unused in this program.\n");
 }
 
@@ -124,18 +124,18 @@ static void printHelp(char *programName) {
  * @param port          filled with UDP receiving data port to listen on.
  * @param range         filled with range of ports in powers of 2 (entropy).
  * @param listenAddr    filled with IP address to listen on for LB data.
- * @param inrate        filled with mean fifo fill rate in Hz.
- * @param outrate       filled with mean fifo drain rate in Hz.
+ * @param bufSize       filled with byte size of internal bufs to hold incoming events.
  * @param fifoSize      filled with max fifo size.
  * @param debug         filled with debug flag.
+ * @param useIPv6       filled with use IP version 6 flag.
  * @param cpAddr        filled with grpc server (control plane) IP address to info to.
  * @param clientName    filled with name of this grpc client (backend) to send to control plane.
  */
 static void parseArgs(int argc, char **argv,
                       uint32_t *clientId, float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range, char *listenAddr,
-                      uint32_t *inrate, uint32_t *outrate, uint32_t *fifoSize,
-                      bool *debug, char *cpAddr, char *clientName) {
+                      uint32_t *bufSize, uint32_t *fifoSize,
+                      bool *debug, bool *useIPv6, char *cpAddr, char *clientName) {
 
     int c, i_tmp;
     bool help = false;
@@ -143,19 +143,19 @@ static void parseArgs(int argc, char **argv,
 
     /* 4 multiple character command-line options */
     static struct option long_options[] =
-            {             {"cp_addr",  1, NULL, 4},
-                          {"cp_port",  1, NULL, 5},
-                          {"name",  1, NULL, 6},
-                          {"id",  1, NULL, 7},
-                          {"range",  1, NULL, 8},
-                          {"in_rate",  1, NULL, 1},
-                          {"out_rate",  1, NULL, 2},
-                          {"fifo",  1, NULL, 3},
+            {             {"bufSize",  1, nullptr, 1},
+                          {"ip6",      0, nullptr, 2},
+                          {"fifo",     1, nullptr, 3},
+                          {"cp_addr",  1, nullptr, 4},
+                          {"cp_port",  1, nullptr, 5},
+                          {"name",     1, nullptr, 6},
+                          {"id",       1, nullptr, 7},
+                          {"range",    1, nullptr, 8},
                           {0,       0, 0,    0}
             };
 
 
-    while ((c = getopt_long_only(argc, argv, "vhs:", long_options, 0)) != EOF) {
+    while ((c = getopt_long_only(argc, argv, "vhs:a:p:b:", long_options, 0)) != EOF) {
 
         if (c == -1)
             break;
@@ -186,10 +186,10 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 1:
-                // mean fill fifo rate
+                // buffer size, 2MB max
                 i_tmp = (int) strtol(optarg, nullptr, 0);
-                if (i_tmp > 0 && i_tmp < 100001) {
-                    *inrate = i_tmp;
+                if (i_tmp > 0 && i_tmp <= 2000000) {
+                    *bufSize = i_tmp;
                 }
                 else {
                     fprintf(stderr, "Invalid argument to -in_rate, 0 < rate <= 100k\n\n");
@@ -199,16 +199,9 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 2:
-                // mean drain fifo rate
-                i_tmp = (int) strtol(optarg, nullptr, 0);
-                if (i_tmp > 0 && i_tmp < 100001) {
-                    *outrate = i_tmp;
-                }
-                else {
-                    fprintf(stderr, "Invalid argument to -out_rate, 0 < rate <= 100k\n\n");
-                    printHelp(argv[0]);
-                    exit(-1);
-                }
+                // use IP version 6
+                fprintf(stderr, "SETTING TO IP version 6\n");
+                *useIPv6 = true;
                 break;
 
             case 3:
@@ -480,8 +473,8 @@ static void *drainFifoThread(void *arg) {
 
 int main(int argc, char **argv) {
 
-    int udpSocket;
     ssize_t nBytes;
+    uint32_t bufSize = 150000; // 150kB default
 
     // Set this to max expected data size
     uint32_t clientId = 0;
@@ -491,6 +484,7 @@ int main(int argc, char **argv) {
 
     uint16_t cpPort = 56789;
     bool debug = false;
+    bool useIPv6 = false;
 
     int range;
     uint16_t port = 7777;
@@ -508,7 +502,7 @@ int main(int argc, char **argv) {
     memset(listeningAddr, 0, 16);
 
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
-              listeningAddr, &inRate, &outRate, &fifoSize, &debug, cpAddr,  clientName);
+              listeningAddr, &bufSize, &fifoSize, &debug, &useIPv6, cpAddr,  clientName);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -518,6 +512,91 @@ int main(int argc, char **argv) {
 
     // convert integer range in PortRange enum-
     auto pRange = PortRange(range);
+
+    ///////////////////////////////////
+    ///    Listening UDP socket    ///
+    //////////////////////////////////
+
+    int udpSocket;
+    int recvBufSize = 25000000;
+
+    if (useIPv6) {
+        struct sockaddr_in6 serverAddr6{};
+
+        // Create IPv6 UDP socket
+        if ((udpSocket = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
+            perror("creating IPv6 client socket");
+            return -1;
+        }
+
+        // Set & read back UDP receive buffer size
+        socklen_t size = sizeof(int);
+        setsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, sizeof(recvBufSize));
+        recvBufSize = 0;
+        getsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, &size);
+        if (debug) fprintf(stderr, "UDP socket recv buffer = %d bytes\n", recvBufSize);
+
+        int optval = 1;
+        setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+
+        // Configure settings in address struct
+        // Clear it out
+        memset(&serverAddr6, 0, sizeof(serverAddr6));
+        // it is an INET address
+        serverAddr6.sin6_family = AF_INET6;
+        // the port we are going to receiver from, in network byte order
+        serverAddr6.sin6_port = htons(port);
+        if (strlen(listeningAddr) > 0) {
+            inet_pton(AF_INET6, listeningAddr, &serverAddr6.sin6_addr);
+        }
+        else {
+            serverAddr6.sin6_addr = in6addr_any;
+        }
+
+        // Bind socket with address struct
+        int err = bind(udpSocket, (struct sockaddr *) &serverAddr6, sizeof(serverAddr6));
+        if (err != 0) {
+            if (debug) fprintf(stderr, "bind socket error\n");
+            return -1;
+        }
+    }
+    else {
+        // Create UDP socket
+        if ((udpSocket = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+            perror("creating IPv4 client socket");
+            return -1;
+        }
+
+        // Set & read back UDP receive buffer size
+        socklen_t size = sizeof(int);
+        setsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, sizeof(recvBufSize));
+        recvBufSize = 0;
+        getsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, &size);
+        fprintf(stderr, "UDP socket recv buffer = %d bytes\n", recvBufSize);
+
+        int optval = 1;
+        setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+
+        // Configure settings in address struct
+        struct sockaddr_in serverAddr{};
+        memset(&serverAddr, 0, sizeof(serverAddr));
+        serverAddr.sin_family = AF_INET;
+        serverAddr.sin_port = htons(port);
+        if (strlen(listeningAddr) > 0) {
+            serverAddr.sin_addr.s_addr = inet_addr(listeningAddr);
+        }
+        else {
+            serverAddr.sin_addr.s_addr = INADDR_ANY;
+        }
+        memset(serverAddr.sin_zero, '\0', sizeof serverAddr.sin_zero);
+
+        // Bind socket with address struct
+        int err = bind(udpSocket, (struct sockaddr *) &serverAddr, sizeof(serverAddr));
+        if (err != 0) {
+            fprintf(stderr, "bind socket error\n");
+            return -1;
+        }
+    }
 
     ///////////////////////////////////
     /// Start Fill & Drain Threads ///
@@ -604,6 +683,9 @@ int main(int argc, char **argv) {
     float prevFill;
     bool startingUp = true;
     int fillIndex = 0, firstLoopCounter = 1;
+
+
+    ejfat::queue<std::vector<char>> QQ(1000);
 
     while (true) {
 
