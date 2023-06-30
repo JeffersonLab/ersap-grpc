@@ -390,7 +390,6 @@ static void *drainFifoThread(void *arg) {
     auto sharedQ  = tArg->sharedQ;
     bool debug    = tArg->debug;
 
-    int32_t bufSize;
     uint32_t delay, totalPkts, pktSequence;
 
 
@@ -650,15 +649,8 @@ int main(int argc, char **argv) {
         // Delay between data points
         std::this_thread::sleep_for(std::chrono::microseconds(waitMicroSecs));
 
-
-
-        // TODO: This will change!!!
         // Read current fifo level
-        fillPercent = fifoLevel;
-
-
-
-
+        fillPercent = sharedQ->size();
         // Previous value at this index
         prevFill = fillValues[fillIndex];
         // Store current val at this index

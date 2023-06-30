@@ -169,6 +169,9 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 not_full.notify_one();
                 return true;
             }
+
+            size_t size() {return content.size();}
+
         };
 
 
