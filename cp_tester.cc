@@ -321,19 +321,22 @@ static void parseArgs(int argc, char **argv,
 }
 
 
+
 // Arg to pass to fifo fill/drain threads
 typedef struct threadArg_t {
-    int  avgInsertionRate; // Hz
-    int  avgDrainRate;     // Hz
-    int  maxFifoLevel;     // 4000 default
-//    int  bytesPerFifoEntry;    // 100kB default
+    // Statistics
+    std::shared_ptr<ejfat::packetRecvStats> stats;
+    std::shared_ptr<ejfat::queue<std::vector<char>>> sharedQ;
+    int  udpSocket;
+    uint32_t bufSize;
     bool debug;
 } threadArg;
 
 
+
 /**
- * This thread fills the fifo independently of the thread to
- * empty it and the thread to read it and inform control plane.
+ * This thread receives event over its UDP socket and fills the fifo
+ * with these event.
  *
  * @param arg struct to be passed to thread.
  */
@@ -341,58 +344,33 @@ static void *fillFifoThread(void *arg) {
 
     threadArg *tArg = (threadArg *) arg;
 
-    int fillRate = tArg->avgInsertionRate;
-    int maxLevel = tArg->maxFifoLevel;
-    bool debug   = tArg->debug;
+    auto stats      = tArg->stats;
+    auto sharedQ    = tArg->sharedQ;
+    int  udpSocket  = tArg->udpSocket;
+    int32_t bufSize = tArg->bufSize;
+    bool debug      = tArg->debug;
 
-    // random device class instance, source of 'true' randomness for initializing random seed
-    std::random_device rd;
-    // Mersenne twister PRNG, initialized with seed from previous random device instance
-    std::mt19937 gen(rd());
+    uint32_t tickPrescale = 1;
+    uint64_t tick;
+    uint16_t dataId;
+    ssize_t  nBytes;
 
-    // The reassembly thread contructs one buffer at a time and inserts it into the fifo.
-    // Thus, to model that, the idea here is to generate a distribution of times between
-    // single insertions. So, a little example.
-    // For 1GB/s (8Gps) incoming data rate and 62.5kB/event, we get
-    // 1e9 / 62.5e3 = 16000 buffers/sec. This translates to a delay of 1/16000 = 62.5 microsec.
-    // Here, delay = 1/fillRate in seconds.
-    // Thus, we'll want a distribution centered around (1/fillRate)*1e6 microseconds.
-    // Delay needs to be an integer. We'll use a Gaussian distribution.
-    int meanDelay = 1000000/fillRate;
-    // Set standard deviation, say 5%
-    int stdDev = meanDelay / 20;
-    int microsecDelay;
-    uint64_t droppedEvents = 0;
+    clearStats(stats);
 
-    // Even distribution between 0 & 1
-    // std::uniform_real_distribution<> d(0.0, 1.0);
-
-    // Gaussian, mean = avg delay, std dev = 5% of mean
-    std::normal_distribution<float> g(meanDelay, stdDev);
 
     while (true) {
-        // Grab mutex
-        std::unique_lock<std::mutex> ul(fifoMutex);
+        // Create vector
+        std::vector<char> vec(bufSize);
 
-        // Wait until fifo is not full
-        while (fifoLevel >= maxLevel) {
-            fifoCV.wait(ul);
+        // Fill vector with data. Insert data about packet order.
+        nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
+        if (nBytes < 0) {
+            fprintf(stderr, "Error in getReassembledBuffer, %ld\n", nBytes);
+            exit(1);
         }
 
-        // Insert buffer into fifo
-        fifoLevel++;
-
-        // Unlock mutex
-        ul.unlock();
-
-        // Tell drain, there is something to pull off
-        fifoCV.notify_one();
-
-        // Get random # in Gaussian dist
-        microsecDelay = g(gen);
-
-        // Delay between insertions
-        std::this_thread::sleep_for(std::chrono::microseconds(microsecDelay));
+        // Move this vector into the queue
+        sharedQ->push(std::move(vec));
     }
 
     return nullptr;
@@ -401,69 +379,44 @@ static void *fillFifoThread(void *arg) {
 
 
 /**
- * This thread drains the fifo independently of the thread to
- * fill it and the thread to read it and inform control plane.
- *
+ * This thread drains the fifo and "processes the data".
  * @param arg struct to be passed to thread.
  */
 static void *drainFifoThread(void *arg) {
 
     threadArg *tArg = (threadArg *) arg;
 
-    int drainRate = tArg->avgDrainRate;
-    int maxLevel  = tArg->maxFifoLevel;
+    auto stats    = tArg->stats;
+    auto sharedQ  = tArg->sharedQ;
     bool debug    = tArg->debug;
 
-    // random device class instance, source of 'true' randomness for initializing random seed
-    std::random_device rd;
-    // Mersenne twister PRNG, initialized with seed from previous random device instance
-    std::mt19937 gen(rd());
+    int32_t bufSize;
+    uint32_t delay, totalPkts, pktSequence;
 
-    // The fill thread inserts one item at a time into the fifo.
-    // It generates a distribution of times between these single insertions.
-    //
-    // This thread, on the other hand, pulls out one item at a time, much as would
-    // an application that processes one event at a time.
-    // As in the insertion thread, we'll use a Gaussian distribution of delay times
-    // between each removal, centered around the time corresponding to the given drain rate.
-    // Thus, we'll want a distribution centered around (1/drainRate)*1e6 microseconds.
-    // Delay needs to be an integer.
-    int meanDelay = 1000000/drainRate;
-    // Set standard deviation to say 15%. This is most likely significantly larger than
-    // the std dev of the filling operation since event processing time can vary widely.
-    int stdDev = meanDelay / 6.7;
-    int microsecDelay;
-    uint64_t emptyFifo = 0;
-
-    // Even distribution between 0 & 1
-    // std::uniform_real_distribution<> d(0.0, 1.0);
-
-    // Gaussian, mean = avg delay, std dev = 5% of mean
-    std::normal_distribution<float> g(meanDelay, stdDev);
 
     while (true) {
-        // Grab mutex
-        std::unique_lock<std::mutex> ul(fifoMutex);
+        // Get vector from the queue
+        std::vector<char> vec;
+        sharedQ->pop(vec);
 
-        // Wait until there is data in fifo
-        while (fifoLevel <= 0) {
-            fifoCV.wait(ul);
+        char *buf = vec.data();
+        ejfat::parsePacketData(buf, &delay, &totalPkts, &pktSequence);
+
+        if (debug) {
+            // Print out the packet sequence in the order they arrived.
+            // This data was placed into buf in the getReassembledBuffer() routine (see fillFifoThread thread above).
+            printf("Pkt arrival sequence, %u total:\n    ",totalPkts);
+
+            uint32_t seq;
+            for (int i=0; i < totalPkts; i++) {
+                seq = buf[12 + 4*i];
+                printf(" %u", seq);
+            }
+            printf("\n");
         }
 
-        // Remove buffer from fifo
-        fifoLevel--;
-
-        // Give up mutex
-        ul.unlock();
-
-        // Notify the insert thread that fifo level dropped so there is room for more
-        fifoCV.notify_one();
-
-        // Get random # in Gaussian dist
-        microsecDelay = g(gen);
-
-        // Delay between removals to simulate event processing
-        std::this_thread::sleep_for(std::chrono::microseconds(microsecDelay));
+        // Delay to simulate data processing
+        std::this_thread::sleep_for(std::chrono::microseconds(delay));
     }
 
     return nullptr;
@@ -489,7 +442,7 @@ int main(int argc, char **argv) {
     int range;
     uint16_t port = 7777;
 
-    uint32_t inRate=16000, outRate=16000, fifoSize = 4000;
+    uint32_t fifoSize = 1000;
 
     char cpAddr[16];
     memset(cpAddr, 0, 16);
@@ -602,15 +555,22 @@ int main(int argc, char **argv) {
     /// Start Fill & Drain Threads ///
     //////////////////////////////////
 
+    // Statistics
+    std::shared_ptr<ejfat::packetRecvStats> stats = std::make_shared<ejfat::packetRecvStats>();
+    auto sharedQ = std::make_shared<ejfat::queue<std::vector<char>>>(fifoSize);
+
+
+
     threadArg *targ = (threadArg *) calloc(1, sizeof(threadArg));
     if (targ == nullptr) {
         fprintf(stderr, "out of mem\n");
         return -1;
     }
 
-    targ->avgInsertionRate = inRate; // 16000 Hz default
-    targ->avgDrainRate = outRate;    // 16000 Hz
-    targ->maxFifoLevel = fifoSize;   // 4000 default
+    targ->stats = stats;
+    targ->sharedQ = sharedQ;
+    targ->udpSocket = udpSocket;
+    targ->bufSize = bufSize;
     targ->debug = debug;
 
     pthread_t thdFill;
@@ -685,15 +645,20 @@ int main(int argc, char **argv) {
     int fillIndex = 0, firstLoopCounter = 1;
 
 
-    ejfat::queue<std::vector<char>> QQ(1000);
-
     while (true) {
 
         // Delay between data points
         std::this_thread::sleep_for(std::chrono::microseconds(waitMicroSecs));
 
+
+
+        // TODO: This will change!!!
         // Read current fifo level
         fillPercent = fifoLevel;
+
+
+
+
         // Previous value at this index
         prevFill = fillValues[fillIndex];
         // Store current val at this index

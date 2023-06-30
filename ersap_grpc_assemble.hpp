@@ -106,6 +106,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
         // Implementation of a fixed size, blocking queue found at:
         // https://morestina.net/blog/1400/minimalistic-blocking-bounded-queue-for-c
+        // Note: Using this queue still requires each buffer to be allocated then freed.
+        // To get better performance, it's best to use the ET system (shared memory) or
+        // the Disruptor (preallocated array of objects).
+        // This is small and convenient for now.
 
         template<typename T>
         class queue {
@@ -182,15 +186,6 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             INTERNAL_ERROR = -10
         };
 
-
-        // Structure to hold reassembly header info
-        typedef struct reHeader_t {
-            uint8_t  version;
-            uint16_t dataId;
-            uint32_t offset;
-            uint32_t length;
-            uint64_t tick;
-        } reHeader;
 
 
         /**
@@ -272,23 +267,6 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
         }
 
 
-        static void clearHeader(reHeader *hdr) {
-            std::memset(hdr, 0, sizeof(reHeader));
-        }
-
-
-        /**
-         * Print reHeader structure.
-         * @param hdr reHeader structure to be printed.
-         */
-        static void printReHeader(reHeader *hdr) {
-            if (hdr == nullptr) {
-                fprintf(stderr, "null pointer\n");
-                return;
-            }
-            fprintf(stderr,  "reHeader: ver %" PRIu8 ", id %" PRIu16 ", off %" PRIu32 ", len %" PRIu32 ", tick %" PRIu64 "\n",
-                    hdr->version, hdr->dataId, hdr->offset, hdr->length, hdr->tick);
-         }
 
 
         /**
@@ -433,55 +411,6 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
         }
 
 
-        /**
-         * Parse the reassembly header at the start of the given buffer.
-         * Return parsed values in pointer args.
-         * The padding values are ignored and only there to circumvent
-         * a bug in the ESNet Load Balancer which otherwise filters out
-         * packets with data payload of 0 or 1 byte.
-         * This is the old, version 1, RE header.
-         *
-         * <pre>
-         *  protocol 'Version:4, Rsvd:10, First:1, Last:1, Data-ID:16, Offset:32 Padding1:8, Padding2:8'
-         *
-         *  0                   1                   2                   3
-         *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |Version|        Rsvd       |F|L|            Data-ID            |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                  UDP Packet Offset                            |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                                                               |
-         *  +                              Tick                             +
-         *  |                                                               |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  *   Padding 1   |   Padding 2   |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         * </pre>
-         *
-         * @param buffer   buffer to parse.
-         * @param version  returned version.
-         * @param first    returned is-first-packet value.
-         * @param last     returned is-last-packet value.
-         * @param dataId   returned data source id.
-         * @param sequence returned packet sequence number.
-         * @param tick     returned tick value, also in LB meta data.
-         */
-        static void parseReHeaderOld(char* buffer, int* version,
-                                  bool *first, bool *last,
-                                  uint16_t* dataId, uint32_t* sequence,
-                                  uint64_t *tick)
-        {
-            // Now pull out the component values
-            *version = (buffer[0] >> 4) & 0xf;
-            *first   = (buffer[1] & 0x02) >> 1;
-            *last    =  buffer[1] & 0x01;
-
-            *dataId   = ntohs(*((uint16_t *) (buffer + 2)));
-            *sequence = ntohl(*((uint32_t *) (buffer + 4)));
-            *tick     = ntohll(*((uint64_t *) (buffer + 8)));
-        }
-
 
         /**
          * Parse the reassembly header at the start of the given buffer.
@@ -525,148 +454,40 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
         }
 
 
-        /**
-         * Parse the reassembly header at the start of the given buffer.
-         * Return parsed values in pointer arg.
-         * This header limits transmission of a single buffer to less than
-         * 2^32 = 4.29496e9 bytes in size.
-         * This is the new, version 2, RE header.
-         *
-         * <pre>
-         *  protocol 'Version:4, Rsvd:12, Data-ID:16, Offset:32, Length:32, Tick:64'
-         *
-         *  0                   1                   2                   3
-         *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |Version|        Rsvd           |            Data-ID            |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                         Buffer Offset                         |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                         Buffer Length                         |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                                                               |
-         *  +                             Tick                              +
-         *  |                                                               |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         * </pre>
-         *
-         * @param buffer   buffer to parse.
-         * @param header   pointer to struct to be filled with RE header info.
-         */
-        static void parseReHeader(const char* buffer, reHeader* header)
-        {
-            // Now pull out the component values
-            if (header != nullptr) {
-                header->version =                       (buffer[0] >> 4) & 0xf;
-                header->dataId  = ntohs(*((uint16_t *)  (buffer + 2)));
-                header->offset  = ntohl(*((uint32_t *)  (buffer + 4)));
-                header->length  = ntohl(*((uint32_t *)  (buffer + 8)));
-                header->tick    = ntohll(*((uint64_t *) (buffer + 12)));
-            }
-        }
-
 
         /**
-        * Parse the reassembly header at the start of the given buffer.
+        * Parse the data in each packet from simSender.
         * Return parsed values in pointer args.
-        * This is the new, version 2, RE header.
+        * All data is in network byte order.
         *
         * <pre>
-        *  protocol 'Version:4, Rsvd:12, Data-ID:16, Offset:32, Length:32, Tick:64'
         *
         *  0                   1                   2                   3
         *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        *  |Version|        Rsvd           |            Data-ID            |
+        *  |                     Processing Delay (microsec)               |
         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        *  |                         Buffer Offset                         |
+        *  |              Total # of packets for this event                |
         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        *  |                         Buffer Length                         |
-        *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        *  |                                                               |
-        *  +                             Tick                              +
-        *  |                                                               |
+        *  |              Packet sequence # for this event                 |
         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
         * </pre>
         *
-        * @param buffer buffer to parse.
-        * @param offset returned byte offset into buffer of this data payload.
-        * @param length returned total buffer length in bytes of which this packet is a port.
-        * @param tick   returned tick value, also in LB meta data.
+        * @param buffer      buffer to parse.
+        * @param delay       returned microsec delay to simulate backend processing.
+        * @param totatPkts   returned total number of packets making up this event.
+        * @param pktSequence returned packet sequence number for this event.
         */
-        static void parseReHeader(const char* buffer, uint32_t* offset, uint32_t *length, uint64_t *tick)
+        static void parsePacketData(const char* buffer, uint32_t* delay,
+                                    uint32_t* totalPkts, uint32_t* pktSequence)
         {
-            *offset = ntohl(*((uint32_t *)  (buffer + 4)));
-            *length = ntohl(*((uint32_t *)  (buffer + 8)));
-            *tick   = ntohll(*((uint64_t *) (buffer + 12)));
+            // Now pull out the component values
+            *delay       = ntohl(*((uint32_t *)  (buffer)));
+            *totalPkts   = ntohl(*((uint32_t *)  (buffer + 4)));
+            *pktSequence = ntohl(*((uint32_t *)  (buffer + 8)));
         }
 
 
-        /**
-         * Parse the reassembly header at the start of the given buffer.
-         * Return parsed values in pointer arg and array.
-         * This is the new, version 2, RE header.
-         *
-         * <pre>
-         *  protocol 'Version:4, Rsvd:12, Data-ID:16, Offset:32, Length:32, Tick:64'
-         *
-         *  0                   1                   2                   3
-         *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |Version|        Rsvd           |            Data-ID            |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                         Buffer Offset                         |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                         Buffer Length                         |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *  |                                                               |
-         *  +                             Tick                              +
-         *  |                                                               |
-         *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         * </pre>
-         *
-         * @param buffer    buffer to parse.
-         * @param intArray  array of ints in which version, dataId, offset,
-         *                  and length are returned, in that order.
-         * @param arraySize number of elements in intArray
-         * @param tick      returned tick value, also in LB meta data.
-         */
-        static void parseReHeader(const char* buffer, uint32_t* intArray, int arraySize, uint64_t *tick)
-        {
-            if (intArray != nullptr && arraySize > 4) {
-                intArray[0] = (buffer[0] >> 4) & 0xf;  // version
-                intArray[1] = ntohs(*((uint16_t *) (buffer + 2))); // data ID
-                intArray[2] = ntohl(*((uint32_t *) (buffer + 4))); // offset
-                intArray[3] = ntohl(*((uint32_t *) (buffer + 8))); // length
-            }
-            *tick = ntohll(*((uint64_t *) (buffer + 12)));
-        }
-
-        /**
-         * Parse the reassembly header at the start of the given buffer.
-         * Return parsed values in array. Used in packetBlasteeFast to
-         * return only needed data.
-         * This is the new, version 2, RE header.
-         *
-         * @param buffer    buffer to parse.
-         * @param intArray  array of ints in which offset, length, and tick are returned.
-         * @param index     where in intArray to start writing.
-         * @param tick      returned tick value.
-         */
-        static void parseReHeaderFast(const char* buffer, uint32_t* intArray, int index, uint64_t *tick)
-        {
-            intArray[index]     = ntohl(*((uint32_t *) (buffer + 4))); // offset
-            intArray[index + 1] = ntohl(*((uint32_t *) (buffer + 8))); // length
-
-            *tick = ntohll(*((uint64_t *) (buffer + 12)));
-            // store tick for later
-            *((uint64_t *) (&(intArray[index + 2]))) = *tick;
-        }
-
-
-        //-----------------------------------------------------------------------
-        // Be sure to print to stderr as programs may pipe data to stdout!!!
-        //-----------------------------------------------------------------------
 
 
         /**
@@ -725,69 +546,6 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             // Copy datq
             ssize_t dataBytes = bytesRead - HEADER_BYTES;
             memcpy(dataBuf, pkt + HEADER_BYTES, dataBytes);
-
-            return dataBytes;
-        }
-
-
-
-        /**
-         * <p>
-         * Routine to read a single UDP packet into a single buffer.
-         * The reassembly header will be parsed and its data retrieved.
-         * This is for the old, version 1, RE header.
-         * </p>
-         *
-         * It's the responsibility of the caller to have at least enough space in the
-         * buffer for 1 MTU of data. Otherwise, the caller risks truncating the data
-         * of a packet and having error code of TRUNCATED_MSG returned.
-         *
-         *
-         * @param dataBuf   buffer in which to store actual data read (not any headers).
-         * @param bufLen    available bytes in dataBuf in which to safely write.
-         * @param udpSocket UDP socket to read.
-         * @param tick      to be filled with tick from RE header.
-         * @param sequence  to be filled with packet sequence from RE header.
-         * @param dataId    to be filled with data id read RE header.
-         * @param version   to be filled with version read RE header.
-         * @param first     to be filled with "first" bit from RE header,
-         *                  indicating the first packet in a series used to send data.
-         * @param last      to be filled with "last" bit id from RE header,
-         *                  indicating the last packet in a series used to send data.
-         * @param debug     turn debug printout on & off.
-         *
-         * @return number of data (not headers!) bytes read from packet.
-         *         If there's an error in recvfrom, it will return RECV_MSG.
-         *         If there is not enough data to contain a header, it will return INTERNAL_ERROR.
-         *         If there is not enough room in dataBuf to hold incoming data, it will return BUF_TOO_SMALL.
-         */
-        static ssize_t readPacketRecvFrom(char *dataBuf, size_t bufLen, int udpSocket,
-                                      uint64_t *tick, uint32_t* sequence, uint16_t* dataId, int* version,
-                                      bool *first, bool *last, bool debug) {
-
-            // Storage for packet
-            char pkt[9100];
-
-            ssize_t bytesRead = recvfrom(udpSocket, pkt, 9100, 0, NULL, NULL);
-            if (bytesRead < 0) {
-                if (debug) fprintf(stderr, "recvmsg() failed: %s\n", strerror(errno));
-                return(RECV_MSG);
-            }
-            else if (bytesRead < HEADER_BYTES_OLD) {
-                fprintf(stderr, "recvfrom(): not enough data to contain a header on read\n");
-                return(INTERNAL_ERROR);
-            }
-
-            if (bufLen < bytesRead) {
-                return(BUF_TOO_SMALL);
-            }
-
-            // Parse header
-            parseReHeaderOld(pkt, version, first, last, dataId, sequence, tick);
-
-            // Copy datq
-            ssize_t dataBytes = bytesRead - HEADER_BYTES_OLD;
-            memcpy(dataBuf, pkt + HEADER_BYTES_OLD, dataBytes);
 
             return dataBytes;
         }
@@ -1012,6 +770,253 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
             return totalBytesRead;
         }
+
+
+
+
+        /**
+        * <p>
+        * Assemble incoming packets into the array backing the given buffer.
+        * It will read return on reading the next entire buffer or on error.
+        * Will work best on small / reasonably sized buffers.
+        * This routine allows for out-of-order packets if they don't cross tick boundaries.
+        * This assumes the new, version 2, RE header.
+        * Data can only come from 1 source, which is returned in the dataId value-result arg.
+        * Data from a source other than that of the first packet will be ignored.
+        * </p>
+        *
+        * <p>
+        * If the given tick value is <b>NOT</b> 0xffffffffffffffff, then it is the next expected tick.
+        * And in this case, this method makes an attempt at figuring out how many buffers and packets
+        * were dropped using tickPrescale.
+        * </p>
+        *
+        * <p>
+        * A note on statistics. The raw counts are <b>ADDED</b> to what's already
+        * in the stats structure. It's up to the user to clear stats before calling
+        * this method if desired.
+        * </p>
+        *
+        * @param dataBuf           place to store assembled packets.
+        * @param bufLen            byte length of dataBuf.
+        * @param udpSocket         UDP socket to read.
+        * @param debug             turn debug printout on & off.
+        * @param tick              value-result parameter which gives the next expected tick
+        *                          and returns the tick that was built. If it's passed in as
+        *                          0xffff ffff ffff ffff, then ticks are coming in no particular order.
+        * @param dataId            to be filled with data ID from RE header (can be nullptr).
+        * @param stats             to be filled packet statistics.
+        * @param tickPrescale      add to current tick to get next expected tick.
+        *
+        * @return total data bytes read (does not include RE header).
+        *         If there error in recvfrom, return RECV_MSG.
+        *         If buffer is too small to contain reassembled data, return BUF_TOO_SMALL.
+        *         If a pkt contains too little data, return INTERNAL_ERROR.
+        */
+        static ssize_t getReassembledBuffer(std::vector<char> &vec, int udpSocket,
+                                            bool debug, uint64_t *tick, uint16_t *dataId,
+                                            std::shared_ptr<packetRecvStats> stats,
+                                            uint32_t tickPrescale) {
+
+            uint64_t prevTick = UINT_MAX;
+            uint64_t expectedTick = *tick;
+            uint64_t packetTick;
+
+            size_t bufLen = vec.capacity();
+            char* dataBuf = vec.data();
+
+            uint32_t offset, length, pktCount;
+            uint32_t delay, totalPkts, pktSequence;
+
+            bool dumpTick = false;
+            bool veryFirstRead = true;
+
+            int  version;
+            uint16_t packetDataId, srcId;
+            ssize_t dataBytes, bytesRead, totalBytesRead = 0;
+
+            // stats
+            bool knowExpectedTick = expectedTick != 0xffffffffffffffffL;
+            bool takeStats = stats != nullptr;
+            int64_t discardedPackets = 0, discardedBytes = 0, discardedBufs = 0;
+
+            // Storage for packet
+            char pkt[9100];
+
+
+            if (debug && takeStats) fprintf(stderr, "getReassembledBuffer: buf size = %lu, take stats = %d, %p\n",
+                                            bufLen, takeStats, stats.get());
+
+            while (true) {
+
+                if (veryFirstRead) {
+                    totalBytesRead = 0;
+                    pktCount = 0;
+                }
+
+                // Read UDP packet
+                bytesRead = recvfrom(udpSocket, pkt, 9100, 0, nullptr, nullptr);
+                if (bytesRead < 0) {
+                    if (debug) fprintf(stderr, "getReassembledBuffer: recvmsg failed: %s\n", strerror(errno));
+                    return (RECV_MSG);
+                }
+                else if (bytesRead < HEADER_BYTES) {
+                    if (debug) fprintf(stderr, "getReassembledBuffer: packet does not contain not enough data\n");
+                    return (INTERNAL_ERROR);
+                }
+                dataBytes = bytesRead - HEADER_BYTES;
+
+
+                // Parse RE header
+                parseReHeader(pkt, &version, &packetDataId, &offset, &length, &packetTick);
+                if (veryFirstRead) {
+                    // record data id of first packet of buffer
+                    srcId = packetDataId;
+                }
+                else if (packetDataId != srcId) {
+                    // different data source, reject this packet
+                    continue;
+                }
+
+
+                // Parse data
+                parsePacketData(pkt + HEADER_BYTES, &delay, &totalPkts, &pktSequence);
+
+
+                // The following if-else is built on the idea that we start with a packet that has offset = 0.
+                // While it's true that, if missing, it may be out-of-order and will show up eventually,
+                // experience has shown that this almost never happens. Thus, for efficiency's sake,
+                // we automatically dump any tick whose first packet does not show up FIRST.
+
+                // To do a complete job of trying to track out-of-order packets, we would need to
+                // simultaneously keep track of packets from multiple ticks. This small routine
+                // would need to keep state - greatly complicating things. So skip that here.
+                // Such work is done in the packetBlasteeFull.cc program.
+
+                // If we get packet from new tick ...
+                if (packetTick != prevTick) {
+                    // If we're here, either we've just read the very first legitimate packet,
+                    // or we've dropped some packets and advanced to another tick.
+
+                    if (offset != 0) {
+                        // Already have trouble, looks like we dropped the first packet of this new tick,
+                        // and possibly others after it.
+                        // So go ahead and dump the rest of the tick in an effort to keep any high data rate.
+                        if (debug)
+                            fprintf(stderr, "Skip pkt from id %hu, %" PRIu64 " - %u, expected seq 0\n",
+                                packetDataId, packetTick, offset);
+
+                        // Go back to read beginning of buffer
+                        veryFirstRead = true;
+                        dumpTick = true;
+                        prevTick = packetTick;
+
+                        // stats
+                        discardedPackets++;
+                        discardedBytes += dataBytes;
+                        discardedBufs++;
+
+                        continue;
+                    }
+
+                    if (!veryFirstRead) {
+                        // The last tick's buffer was not fully contructed
+                        // before this new tick showed up!
+                        if (debug) fprintf(stderr, "Discard tick %" PRIu64 "\n", prevTick);
+
+                        pktCount = 0;
+                        totalBytesRead = 0;
+                        srcId = packetDataId;
+                    }
+
+                    // If here, new tick/event/buffer, offset = 0.
+                    // There's a chance we can construct a full buffer.
+                    // Overwrite everything we saved from previous tick.
+                    dumpTick = false;
+                }
+                else if (dumpTick) {
+                    // Same as last tick.
+                    // If here, we missed beginning pkt(s) for this buf so we're dumping whole tick
+                    veryFirstRead = true;
+
+                    // stats
+                    discardedPackets++;
+                    discardedBytes += dataBytes;
+
+                    if (debug) fprintf(stderr, "Dump pkt from id %hu, %" PRIu64 " - %u, expected seq 0\n",
+                            packetDataId, packetTick, offset);
+                    continue;
+                }
+
+
+                // After reading very first pkt, check to see if we have enough memory to read in the whole event.
+                // If not, expand it.
+                if (veryFirstRead && length > bufLen) {
+                    if (debug) fprintf(stderr, "getReassembledBuffer: expand vector to hold %u bytes\n", length);
+                    vec.reserve(length);
+                    bufLen = length;
+                    dataBuf = vec.data();
+                }
+
+
+                // Copy data into buf at correct location (provided by RE header)
+                memcpy(dataBuf + offset, pkt + HEADER_BYTES, dataBytes);
+
+
+                // At this point we do something clever. We record the packet number
+                // and write it into the data buffer - just after the first pkt's 3 data ints.
+                // This way we preserve exactly what came in and in what order.
+                // Just use local byte order since it's only going to be read by another thd in this process.
+                memcpy(dataBuf + 12 + 4*pktCount, &pktSequence, 4);
+
+
+                totalBytesRead += dataBytes;
+                veryFirstRead = false;
+                prevTick = packetTick;
+                pktCount++;
+
+
+                // If we've reassembled all packets ...
+                if (pktCount >= totalPkts) {
+                    // Done
+                    *tick = packetTick;
+                    if (dataId != nullptr) *dataId = packetDataId;
+
+                    // Keep some stats
+                    if (takeStats) {
+                        int64_t diff = 0;
+                        int64_t droppedTicks = 0UL;
+                        if (knowExpectedTick) {
+                            diff = packetTick - expectedTick;
+                            diff = (diff < 0) ? -diff : diff;
+                            droppedTicks = diff / tickPrescale;
+
+                            // In this case, it includes the discarded bufs (which it should not)
+                            stats->droppedBuffers   += droppedTicks; // estimate
+
+                            // This works if all the buffers coming in are exactly the same size.
+                            // If they're not, then the # of packets of this buffer
+                            // is used to guess at how many packets were dropped for the dropped tick(s).
+                            // Again, this includes discarded packets which it should not.
+                            stats->droppedPackets += droppedTicks * pktCount;
+                        }
+
+                        stats->acceptedBytes    += totalBytesRead;
+                        stats->acceptedPackets  += pktCount;
+
+                        stats->discardedBytes   += discardedBytes;
+                        stats->discardedPackets += discardedPackets;
+                        stats->discardedBuffers += discardedBufs;
+                    }
+
+                    break;
+                }
+            }
+
+            return totalBytesRead;
+        }
+
+
 
 
 
