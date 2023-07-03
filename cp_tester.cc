@@ -404,7 +404,7 @@ static void *drainFifoThread(void *arg) {
         if (debug) {
             // Print out the packet sequence in the order they arrived.
             // This data was placed into buf in the getReassembledBuffer() routine (see fillFifoThread thread above).
-            printf("Pkt arrival sequence, %u total:\n    ",totalPkts);
+            printf("Pkt delay %u usec, %u total pkts, arrival sequence:\n", delay, totalPkts);
 
             uint32_t seq;
             for (int i=0; i < totalPkts; i++) {
@@ -439,9 +439,9 @@ int main(int argc, char **argv) {
     bool useIPv6 = false;
 
     int range;
-    uint16_t port = 7777;
+    uint16_t port = 17750;
 
-    uint32_t fifoSize = 1000;
+    uint32_t fifoCapacity = 1000;
 
     char cpAddr[16];
     memset(cpAddr, 0, 16);
@@ -454,7 +454,7 @@ int main(int argc, char **argv) {
     memset(listeningAddr, 0, 16);
 
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
-              listeningAddr, &bufSize, &fifoSize, &debug, &useIPv6, cpAddr,  clientName);
+              listeningAddr, &bufSize, &fifoCapacity, &debug, &useIPv6, cpAddr,  clientName);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -556,8 +556,9 @@ int main(int argc, char **argv) {
 
     // Statistics
     std::shared_ptr<ejfat::packetRecvStats> stats = std::make_shared<ejfat::packetRecvStats>();
-    auto sharedQ = std::make_shared<ejfat::queue<std::vector<char>>>(fifoSize);
 
+    // Fifo/queue in which to hold reassembled buffers
+    auto sharedQ = std::make_shared<ejfat::queue<std::vector<char>>>(fifoCapacity);
 
 
     threadArg *targ = (threadArg *) calloc(1, sizeof(threadArg));
@@ -599,23 +600,10 @@ int main(int argc, char **argv) {
     const float Kd = 0.00;
     const float deltaT = 1.0; // 1 millisec
 
-    // Fifo
-    fifoLevel = 0;
-    float fillPercent;
-    // The ET system (which acts as a fifo) has fifoLevelMax of eventSize bytes each.
-    // This is reported to the control plane during registration.
-    int eventSize = 100000;
-    int fifoLevelMax = 1000;
-
-    // Reading fifo level
-    int loopMax   = 1000;
-    int loopCount = loopMax;  // loopMax loops of waitMicroSecs microseconds
-    int waitMicroSecs = 1000; // By default, loop every millisec
-
     // Create grpc client of control plane
     LbControlPlaneClient client(cpAddr, cpPort,
                                 listeningAddr, port, pRange,
-                                clientName, eventSize, fifoLevelMax, setPoint);
+                                clientName, bufSize, fifoCapacity, setPoint);
 
     // Register this client with the grpc server
     int32_t err = client.Register();
@@ -632,6 +620,11 @@ int main(int argc, char **argv) {
     // will NOT be an accurate representation. It will include a lot of noise. To prevent this,
     // keep a running average of the fill %, so its reported value is a more accurate portrayal
     // of what's really going on. In this case a running avg is taken over the reporting time.
+
+    int loopMax   = 1000;
+    int loopCount = loopMax;  // loopMax loops of waitMicroSecs microseconds
+    int waitMicroSecs = 1000; // By default, loop every millisec
+
     float runningFillTotal = 0., fillAvg;
     float fillValues[loopMax];
     memset(fillValues, 0, loopMax*sizeof(float));
@@ -639,7 +632,7 @@ int main(int argc, char **argv) {
     // Keep circulating thru array. Highest index is loopMax - 1.
     // The first time thru, we don't want to over-weight with (loopMax - 1) zero entries.
     // So we read loopMax entries first, before we start keeping stats & reporting level.
-    float prevFill;
+    float prevFill, curFill, fillPercent;
     bool startingUp = true;
     int fillIndex = 0, firstLoopCounter = 1;
 
@@ -650,14 +643,14 @@ int main(int argc, char **argv) {
         std::this_thread::sleep_for(std::chrono::microseconds(waitMicroSecs));
 
         // Read current fifo level
-        fillPercent = sharedQ->size();
+        curFill = sharedQ->size();
         // Previous value at this index
         prevFill = fillValues[fillIndex];
         // Store current val at this index
-        fillValues[fillIndex++] = fillPercent;
+        fillValues[fillIndex++] = curFill;
         // Add current val and remove previous val at this index from the running total.
         // That way we have added loopMax number of most recent entries at ony one time.
-        runningFillTotal += fillPercent - prevFill;
+        runningFillTotal += curFill - prevFill;
         // Find index for the next round
         fillIndex = (fillIndex == loopMax) ? 0 : fillIndex;
 
@@ -677,6 +670,8 @@ int main(int argc, char **argv) {
             fillAvg = runningFillTotal / loopMax;
         }
 
+        fillPercent = fillAvg/fifoCapacity*100;
+
         // PID error
         pidError = pid(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
 
@@ -692,7 +687,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            printf("Total cnt %d, %f%% filled, %f avg, error %f\n", fifoLevelMax, fillPercent, fillAvg, pidError);
+            printf("Fifo %d%% filled, %d avg level, pid err %f\n", (int)fillPercent, (int)fillAvg, pidError);
 
             loopCount = loopMax;
         }

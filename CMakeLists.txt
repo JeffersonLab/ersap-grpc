@@ -109,8 +109,8 @@ add_custom_command(
 )
 
 set(HEADER_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/ejfat_packetize.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ejfat_assemble_ersap.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ersap_grpc_packetize.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ersap_grpc_assemble.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         ${hw_proto_hdrs} ${hw_grpc_hdrs}
@@ -141,7 +141,6 @@ set(GRPC_EXEC_FILES
         cp_tester.cc
         simSender.cc
         cp_server.cc
-        packetBlastee.cc
         )
 
 

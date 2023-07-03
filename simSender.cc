@@ -723,6 +723,7 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Create a variable backend processing time (gausssian around the given backend time)
     uint32_t backendTime = beDelayTime;
+    fprintf(stderr, "BACKEND TIME = %u\n", beDelayTime);
 
     // For generating random, distributed numbers
     std::random_device rd;

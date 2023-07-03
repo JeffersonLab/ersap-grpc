@@ -398,8 +398,9 @@ namespace ejfat {
         uint32_t *data = (uint32_t * )(buffer + HEADER_BYTES);
 
         // Write data that does not change only once
-        data[0] = ntohl(backendTime);
-        data[1] = ntohl(totalPackets);
+        if (debug) fprintf(stderr, "Send %u backend time\n", backendTime);
+        data[0] = htonl(backendTime);
+        data[1] = htonl(totalPackets);
 
 
         while (remainingPackets-- > 0) {
@@ -410,7 +411,7 @@ namespace ejfat {
             setReMetadata(buffer + LB_HEADER_BYTES, localOffset, dataLen, tick, version, dataId);
 
             // Write data that changes with each packet
-            data[2] = ntohl(++packetCounter);
+            data[2] = htonl(++packetCounter);
 
             // Send packet to receiver
             if (debug) fprintf(stderr, "Send %u bytes\n", bytesToWrite);
