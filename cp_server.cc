@@ -10,7 +10,7 @@
 /**
  * @file
  * Simulate a load balancer's control plane by receiving gRPC messages from an ERSAP (simulated) backend --
- * packetBlasteeEtFifoClient.c and control_plane_tester.c programs.
+ * packetBlasteeEtFifoClient.c, control_plane_tester.c, cp_tester.cc programs.
  */
 
 #include <memory>
@@ -18,14 +18,14 @@
 
 #include <cstdlib>
 #include <iostream>
-#include <time.h>
+#include <ctime>
 #include <thread>
 #include <cmath>
 #include <chrono>
 #include <atomic>
 #include <algorithm>
 #include <cstring>
-#include <errno.h>
+#include <cerrno>
 #include <cinttypes>
 #include <getopt.h>
 #include <random>
@@ -51,24 +51,9 @@
 #endif
 
 #include "lb_cplane.h"
+#include "ersap_grpc_assemble.hpp"
 
 
-//using grpc::Channel;
-//using grpc::ClientContext;
-//using grpc::Status;
-//
-//using grpc::Server;
-//using grpc::ServerBuilder;
-//using grpc::ServerContext;
-//using grpc::Status;
-//
-//using lbControlPlaneEsnet::LoadBalancer;
-//using lbControlPlaneEsnet::ServerReply;
-//using lbControlPlaneEsnet::ErrorCode;
-//using lbControlPlaneEsnet::RegistrationRequest;
-//using lbControlPlaneEsnet::AuthenticationType;
-//using lbControlPlaneEsnet::UnRegistrationRequest;
-//using lbControlPlaneEsnet::CurrentState;
 
 using namespace std;
 
@@ -86,13 +71,15 @@ using namespace std;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v]",
+            "        [-h] [-v] [-ip6]",
             "        [-p <grpc server port>]",
+            "        [-sport <sync msg port>]",
             "        [-cores <comma-separated list of cores to run on>]");
 
     fprintf(stderr, "        This is a gRPC server getting requests/data from an ERSAP reasembly backend's gRPC client.\n");
+    fprintf(stderr, "        It also receives sync msgs from data senders as to the latest event # sent.\n");
 }
 
 
@@ -102,20 +89,23 @@ static void printHelp(char *programName) {
  * @param argc          arg count from main().
  * @param argv          arg list from main().
  * @param cores         array of core ids on which to run assembly thread.
- * @param port          filled with port of gRPC server ERSAP reassembly backend).
+ * @param port          filled with port of gRPC server).
+ * @param sport         filled with port of control plane's input for sync msgs).
  * @param debug         filled with debug flag.
  */
 static void parseArgs(int argc, char **argv,
-                      int *cores, uint16_t* port,
-                      bool *debug) {
+                      int *cores, uint16_t* port, uint16_t* sport,
+                      bool *debug, bool *useIPv6) {
 
     int c, i_tmp;
     bool help = false;
 
     /* 4 multiple character command-line options */
     static struct option long_options[] =
-            {             {"cores",  1, NULL, 1},
-                          {0,       0, 0,    0}
+            { {"cores",  1, NULL, 1},
+              {"sport",  1, NULL, 2},
+              {"ip6",      0, nullptr, 3},
+               {0,       0, 0,    0}
             };
 
 
@@ -137,6 +127,24 @@ static void parseArgs(int argc, char **argv,
                     printHelp(argv[0]);
                     exit(-1);
                 }
+                break;
+
+            case 2:
+                // sync msg PORT
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 1023 && i_tmp < 65535) {
+                    *sport = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -sport, 1023 < port < 65536\n");
+                    exit(-1);
+                }
+                break;
+
+            case 3:
+                // use IP version 6
+                fprintf(stderr, "SETTING TO IP version 6\n");
+                *useIPv6 = true;
                 break;
 
             case 1:
@@ -217,7 +225,58 @@ static void parseArgs(int argc, char **argv,
 }
 
 
-// structure for passing args to thread
+
+
+// Arg to pass to sync thread
+typedef struct threadArg_t {
+    int  socket;
+    bool debug;
+} threadArg;
+
+
+
+/**
+ * This thread receives sync messages indicating the latest event sent for a particular data source.
+ * @param arg struct to be passed to thread.
+ */
+static void *syncThread(void *arg) {
+
+    threadArg *tArg = (threadArg *) arg;
+
+    int  socket  = tArg->socket;
+    bool debug   = tArg->debug;
+
+    uint32_t version, srcId, evtRate;
+    uint64_t evtNum, nanos;
+    char pkt[9100];
+
+
+    while (true) {
+
+        // Read UDP packet
+        ssize_t bytesRead = recvfrom(socket, pkt, 9100, 0, nullptr, nullptr);
+        if (bytesRead < 20) {
+            if (debug) fprintf(stderr, "cp_server: got sync packet that's too small, ignore\n");
+            continue;
+        }
+
+        // Parse sync msg
+        ejfat::parseSyncData(pkt, &version, &srcId, &evtNum, &evtRate, &nanos);
+
+        if (debug) {
+            fprintf(stderr, "cp_server: sync pkt from %u, version %u, event #%" PRIu64 ", rate %u Hz, nanos %" PRIu64 "\n",
+                    srcId, version, evtNum, evtRate, nanos);
+        }
+    }
+
+    return nullptr;
+}
+
+
+
+
+
+// structure for passing args to GRPC server thread
 typedef struct threadStruct_t {
     LoadBalancerServiceImpl *pGrpcService;
     bool debug;
@@ -345,15 +404,16 @@ static void *controlThread(void *arg) {
 int main(int argc, char **argv) {
 
     ssize_t nBytes;
-    uint16_t port = 50051;
+    uint16_t port = 50051, sport = 50052;
     int cores[10];
     bool debug = false;
+    bool useIPv6 = false;
 
     for (int i=0; i < 10; i++) {
         cores[i] = -1;
     }
 
-    parseArgs(argc, argv, cores, &port, &debug);
+    parseArgs(argc, argv, cores, &port, &sport, &debug, &useIPv6);
 
 #ifdef __linux__
 
@@ -386,6 +446,91 @@ int main(int argc, char **argv) {
 
 #endif
 
+    ///////////////////////////////////////////////
+    ///    Listening UDP socket for sync msgs   ///
+    ///////////////////////////////////////////////
+
+    int udpSocket;
+
+
+    if (useIPv6) {
+        struct sockaddr_in6 serverAddr6{};
+
+        // Create IPv6 UDP socket
+        if ((udpSocket = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
+            perror("creating IPv6 client socket");
+            return -1;
+        }
+
+        int optval = 1;
+        setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+
+        // Configure settings in address struct
+        // Clear it out
+        memset(&serverAddr6, 0, sizeof(serverAddr6));
+        // it is an INET address
+        serverAddr6.sin6_family = AF_INET6;
+        // the port we are going to receiver from, in network byte order
+        serverAddr6.sin6_port = htons(sport);
+        serverAddr6.sin6_addr = in6addr_any;
+
+        // Bind socket with address struct
+        int err = bind(udpSocket, (struct sockaddr *) &serverAddr6, sizeof(serverAddr6));
+        if (err != 0) {
+            if (debug) fprintf(stderr, "bind socket error\n");
+            return -1;
+        }
+    }
+    else {
+        // Create UDP socket
+        if ((udpSocket = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+            perror("creating IPv4 client socket");
+            return -1;
+        }
+
+        int optval = 1;
+        setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+
+        // Configure settings in address struct
+        struct sockaddr_in serverAddr{};
+        memset(&serverAddr, 0, sizeof(serverAddr));
+        serverAddr.sin_family = AF_INET;
+        serverAddr.sin_port = htons(sport);
+        serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+        // Bind socket with address struct
+        int err = bind(udpSocket, (struct sockaddr *) &serverAddr, sizeof(serverAddr));
+        if (err != 0) {
+            fprintf(stderr, "bind socket error\n");
+            return -1;
+        }
+    }
+
+    /////////////////////////
+    /// Start sync Thread ///
+    /////////////////////////
+
+    threadArg *tArg = (threadArg *) calloc(1, sizeof(threadArg));
+    if (tArg == nullptr) {
+        fprintf(stderr, "out of mem\n");
+        return -1;
+    }
+
+    tArg->socket = udpSocket;
+    tArg->debug  = debug;
+
+    pthread_t thd;
+    int status = pthread_create(&thd, NULL, syncThread, (void *) tArg);
+    if (status != 0) {
+        fprintf(stderr, "\n ******* error creating fill thread\n\n");
+        return -1;
+    }
+
+
+    ////////////////////////////////
+    /// Start GRPC server Thread ///
+    ////////////////////////////////
+
     // Start with offset 0 in very first packet to be read
     uint64_t tick = 0L;
     uint16_t dataId;
@@ -405,7 +550,7 @@ int main(int argc, char **argv) {
     targ->pGrpcService = pGrpcService;
 
     pthread_t thd1;
-    int status = pthread_create(&thd1, NULL, controlThread, (void *) targ);
+    status = pthread_create(&thd1, NULL, controlThread, (void *) targ);
     if (status != 0) {
         fprintf(stderr, "\n ******* error creating PID thread ********\n\n");
         return -1;

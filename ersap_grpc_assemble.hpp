@@ -458,7 +458,57 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
 
 
-        /**
+       /**
+        * <p>
+        * Parse the data of a synchronization message sent directly to the load balancer's CP.
+        * The first 3 fields are as ordered. The srcId, evtNum, evtRate and time are all
+        * in network byte order.</p>
+        * Implemented <b>without</b> using C++ bit fields.
+        *
+        * <pre>
+        *  protocol 'Version:4, Rsvd:12, Data-ID:16, Offset:32, Length:32, Tick:64'
+        *
+        *    0                   1                   2                   3
+        *    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        *    |       L       |       C       |    Version    |      Rsvd     |
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        *    |                           EventSrcId                          |
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        *    |                                                               |
+        *    +                          EventNumber                          +
+        *    |                                                               |
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        *    |                         AvgEventRateHz                        |
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        *    |                                                               |
+        *    +                          UnixTimeNano                         +
+        *    |                                                               |
+        *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        * </pre>
+        *
+        * @param buffer   data buffer.
+        * @param version  filled with version of the software used to send this msg.
+        * @param srcId    filled iwth id number of data source.
+        * @param evtNum   filled with unsigned 64 bit event number used to tell the load balancer
+        *                 that the sending data source has already sent this, latest, event.
+        * @param evtRate  filled with the rate, in Hz, that the sending data source is sending events
+        *                 to the load balancer (0 if unknown).
+        * @param nanos    filled with the unix time in nanoseconds that this message sent (0 if unknown).
+        */
+       static void parseSyncData(const char *buffer, uint32_t *version, uint32_t *srcId,
+                                 uint64_t *evtNum, uint32_t *evtRate, uint64_t *nanos) {
+
+           *version  = buffer[2] & 0xff;
+           *srcId    = ntohl (*((uint32_t *)  (buffer + 4)));
+           *evtNum   = ntohll(*((uint64_t *)  (buffer + 8)));
+           *evtRate  = ntohl (*((uint32_t *)  (buffer + 16)));
+           *nanos    = ntohll(*((uint64_t *)  (buffer + 20)));
+       }
+
+
+
+       /**
         * Parse the data in each packet from simSender.
         * Return parsed values in pointer args.
         * All data is in network byte order.

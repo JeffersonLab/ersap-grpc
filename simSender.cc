@@ -80,11 +80,11 @@ static void printHelp(char *programName) {
             "        [-time <microsec for receiver to delay to simulate processing>]",
             "        [-twidth <microsec 1/2 width of gaussian for variable processing delay>]\n",
 
-            "        [-host <destination host (defaults to 127.0.0.1)>]",
-            "        [-p <destination UDP port>]\n",
+            "        [-host <destination host (default 127.0.0.1)>]",
+            "        [-p <destination UDP port (default 19522)>]\n",
 
-            "        [-cphost <control plane host (defaults to 127.0.0.1)>]",
-            "        [-cpport <control plane UDP port>]\n",
+            "        [-cphost <control plane host (defauls 127.0.0.1)>]",
+            "        [-cpport <control plane UDP port (default 19523>]\n",
 
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
             "        [-mtu <desired MTU size>]",
@@ -606,7 +606,7 @@ int main(int argc, char **argv) {
     uint32_t offset = 0, sendBufSize = 0;
     uint32_t delay = 0, packetDelay = 0, bufferDelay = 0;
     uint64_t bufRate = 0L, bufSize = 62500L, byteRate = 0L;
-    uint16_t port = 0x4c42, cpport = 19523; // FPGA port is default, cp is one more
+    uint16_t port = 0x4c42, cpport = 50052; // FPGA port is default
     uint64_t tick = 0;
     int cores[10];
     int mtu, version = 2, protocol = 1, entropy = 0;
@@ -723,7 +723,7 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Create a variable backend processing time (gausssian around the given backend time)
     uint32_t backendTime = beDelayTime;
-    fprintf(stderr, "BACKEND TIME = %u\n", beDelayTime);
+    fprintf(stderr, "BACKEND TIME = %u, useTimeWidth = %s\n", beDelayTime, btoa(useTimeSpread));
 
     // For generating random, distributed numbers
     std::random_device rd;
@@ -974,7 +974,7 @@ int main(int argc, char **argv) {
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
-    uint32_t evtRate;
+    uint64_t evtRate;
     uint64_t bufsSent = 0UL;
 
     while (true) {
@@ -1048,11 +1048,16 @@ int main(int argc, char **argv) {
 
             // if >= 1 sec ...
             if (syncTime >= 1000000000UL) {
+
+                //fprintf(stderr, "be time = %u\n", backendTime);
+                fprintf(stderr, "buf bytes = %u\n", bufByteSize);
+
+
                 // Calculate buf or event rate in Hz
-                evtRate = bufsSent/(syncTime/1000000000);
+                evtRate = bufsSent*1000000000/syncTime;
 
                 // Send sync message to same destination
-if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %u\n\n", tick, evtRate);
+if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %" PRIu64 "\n\n", tick, evtRate);
                 setSyncData(syncBuf, version, dataId, tick, evtRate, syncTime);
                 err = send(cpSocket, syncBuf, 28, 0);
                 if (err == -1) {
