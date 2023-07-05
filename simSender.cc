@@ -70,7 +70,7 @@ static void printHelp(char *programName) {
     fprintf(stderr,
             "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v] [-ip6] [-sync]\n",
+            "        [-h] [-v] [-ipv6] [-sync]\n",
 
             "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]",
             "        [-bufdelay] (delay between each buffer, not packet)",
@@ -200,11 +200,11 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 if (tmp > 2000000) {
                     *bufSize = 2000000;
                 }
-                else if (tmp >= 500) {
+                else if (tmp >= 1500) {
                     *bufSize = tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -b, buf size >= 500 and <= 2MB\n");
+                    fprintf(stderr, "Invalid argument to -b, buf size >= 1500 and <= 2MB\n");
                     exit(-1);
                 }
                 break;
@@ -1050,7 +1050,7 @@ int main(int argc, char **argv) {
             if (syncTime >= 1000000000UL) {
 
                 //fprintf(stderr, "be time = %u\n", backendTime);
-                fprintf(stderr, "buf bytes = %u\n", bufByteSize);
+                //fprintf(stderr, "buf bytes = %u\n", bufByteSize);
 
 
                 // Calculate buf or event rate in Hz

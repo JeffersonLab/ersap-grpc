@@ -93,8 +93,8 @@ static void printHelp(char *programName) {
     fprintf(stderr,
             "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v] [-ip6]",
-            "        [-p <data receiving port (for registration)>]",
+            "        [-h] [-v] [-ipv6]",
+            "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
 
@@ -104,12 +104,14 @@ static void printHelp(char *programName) {
             "        [-name <backend name>]",
             "        [-id <backend id#>]",
 
-            "        [-b <internal buf size to hold event>]",
-            "        [-fifo <fifo size>]",
-            "        [-s <PID fifo set point>]");
+            "        [-b <internal buf size to hold event (150kB default)>]",
+            "        [-fifo <fifo size (1000 default)>]",
+            "        [-s <PID fifo set point (0 default)>]");
 
     fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a control plane.\n");
-    fprintf(stderr, "        The -p, -a, and -range args are only to tell CP where to send our data, but are unused in this program.\n");
+    fprintf(stderr, "        The -p, -a, and -range args are only to tell CP where to send our data, but are otherwise unused.\n");
+    fprintf(stderr, "        In practice, the buffer into which data is received can expand as needed, so the -b arg gives a value\n");
+    fprintf(stderr, "        passed on to the CP which gives the max size of fifo entries as a way for the CP to gauge memory uses.\n");
 }
 
 
@@ -143,8 +145,7 @@ static void parseArgs(int argc, char **argv,
 
     /* 4 multiple character command-line options */
     static struct option long_options[] =
-            {             {"bufSize",  1, nullptr, 1},
-                          {"ip6",      0, nullptr, 2},
+            {             {"ipv6",     0, nullptr, 2},
                           {"fifo",     1, nullptr, 3},
                           {"cp_addr",  1, nullptr, 4},
                           {"cp_port",  1, nullptr, 5},
@@ -185,18 +186,22 @@ static void parseArgs(int argc, char **argv,
                 }
                 break;
 
-            case 1:
-                // buffer size, 2MB max
-                i_tmp = (int) strtol(optarg, nullptr, 0);
-                if (i_tmp > 0 && i_tmp <= 2000000) {
+            case 'b':
+                // BUFFER SIZE
+                i_tmp = (int)strtol(optarg, nullptr, 0);
+                if (i_tmp > 2000000) {
+                    *bufSize = 2000000;
+                }
+                else if (i_tmp >= 1500) {
                     *bufSize = i_tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -in_rate, 0 < rate <= 100k\n\n");
+                    fprintf(stderr, "Invalid argument to -b, buf size >= 1500 and <= 2MB\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
                 break;
+
 
             case 2:
                 // use IP version 6
@@ -360,7 +365,9 @@ static void *fillFifoThread(void *arg) {
 
     while (true) {
         // Create vector
-        std::vector<char> vec(bufSize);
+        std::vector<char> vec;
+        // We can create vector capacity here, but not necessary
+        //vec.reserve(bufSize);
 
         // Fill vector with data. Insert data about packet order.
         nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
@@ -432,7 +439,7 @@ int main(int argc, char **argv) {
     uint32_t clientId = 0;
 
     float pidError = 0.F;
-    float setPoint = 0.5F;   // set fifo to 1/2 full by default
+    float setPoint = 0.F;   // set fifo to 1/2 full by default
 
     uint16_t cpPort = 56789;
     bool debug = false;

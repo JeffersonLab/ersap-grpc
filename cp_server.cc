@@ -73,7 +73,7 @@ static void printHelp(char *programName) {
     fprintf(stderr,
             "\nusage: %s\n%s\n%s\n%s\n%s\n\n",
             programName,
-            "        [-h] [-v] [-ip6]",
+            "        [-h] [-v] [-ipv6]",
             "        [-p <grpc server port>]",
             "        [-sport <sync msg port>]",
             "        [-cores <comma-separated list of cores to run on>]");
@@ -102,9 +102,9 @@ static void parseArgs(int argc, char **argv,
 
     /* 4 multiple character command-line options */
     static struct option long_options[] =
-            { {"cores",  1, NULL, 1},
-              {"sport",  1, NULL, 2},
-              {"ip6",      0, nullptr, 3},
+            { {"cores",  1, nullptr, 1},
+              {"sport",  1, nullptr, 2},
+              {"ipv6",   0, nullptr, 3},
                {0,       0, 0,    0}
             };
 
