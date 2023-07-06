@@ -365,7 +365,6 @@ static void *fillFifoThread(void *arg) {
 
     auto stats      = tArg->stats;
     auto sharedQ    = tArg->sharedQ;
-    auto sharedCB   = tArg->sharedCB;
     int  udpSocket  = tArg->udpSocket;
     int32_t bufSize = tArg->bufSize;
     bool debug      = tArg->debug;
@@ -411,7 +410,6 @@ static void *drainFifoThread(void *arg) {
 
     auto stats    = tArg->stats;
     auto sharedQ  = tArg->sharedQ;
-    auto sharedCB = tArg->sharedCB;
     bool debug    = tArg->debug;
 
     uint32_t delay, totalPkts, pktSequence;
