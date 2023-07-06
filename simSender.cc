@@ -84,7 +84,7 @@ static void printHelp(char *programName) {
             "        [-p <destination UDP port (default 19522)>]\n",
 
             "        [-cphost <control plane host (defauls 127.0.0.1)>]",
-            "        [-cpport <control plane UDP port (default 19523>]\n",
+            "        [-cpport <control plane sync msg port (default 50051)>]\n",
 
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
             "        [-mtu <desired MTU size>]",

@@ -74,8 +74,8 @@ static void printHelp(char *programName) {
             "\nusage: %s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
-            "        [-p <grpc server port>]",
-            "        [-sport <sync msg port>]",
+            "        [-p <grpc server port (default 50051)>]",
+            "        [-sport <sync msg port (default 50052)>]",
             "        [-cores <comma-separated list of cores to run on>]");
 
     fprintf(stderr, "        This is a gRPC server getting requests/data from an ERSAP reasembly backend's gRPC client.\n");
@@ -557,7 +557,7 @@ int main(int argc, char **argv) {
     }
 
     while (true) {
-        std::cout << "About to run GRPC server on port 50051" << std::endl;
+        std::cout << "About to run GRPC server on port " << port << std::endl;
         pGrpcService->runServer(port, pGrpcService);
         std::cout << "Should never print this message!!!" << std::endl;
     }

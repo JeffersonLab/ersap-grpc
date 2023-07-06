@@ -51,11 +51,11 @@ enough and be processed even more slowly to allow the cp_tester's fifo to fill u
 the coarse of several seconds. Note that the LB is at addr = 172.19.22.244 and the host
 is at addr = 172.19.22.15
 
-1) **cp_server** -p 56789
+1) **cp_server**
 
-2) **cp_tester** -cp_port 56789 -cp_addr 172.19.22.15  -a 172.19.22.15
+2) **cp_tester** -cp_addr 172.19.22.15  -a 172.19.22.15
 
-3) **simSender** -mtu 9000 -d 5000 -host 172.19.22.244 -bufdelay -time 6500 -twidth 30 -sync -cphost 172.19.22.15 -cpport 50052 -bwidth 5000
+3) **simSender** -mtu 9000 -d 5000 -host 172.19.22.244 -bufdelay -time 6500 -twidth 30 -sync -cphost 172.19.22.15 -bwidth 5000
 
 
 Note that giving the -h arg will provide all program options. Notice also that the sender is

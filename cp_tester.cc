@@ -52,6 +52,7 @@
 // GRPC stuff
 #include "lb_cplane.h"
 #include "ersap_grpc_assemble.hpp"
+#include "readerwritercircularbuffer.h"
 
 
 
@@ -100,7 +101,7 @@ static void printHelp(char *programName) {
             "        [-token <authentication token (for registration)>]",
 
             "        [-cp_addr <control plane IP address>]",
-            "        [-cp_port <control plane port>]",
+            "        [-cp_port <control plane port (default 50051)>]",
 
             "        [-name <backend name>]",
             "        [-id <backend id#>]",
@@ -365,6 +366,7 @@ static void *fillFifoThread(void *arg) {
 
     auto stats      = tArg->stats;
     auto sharedQ    = tArg->sharedQ;
+    auto sharedCB   = tArg->sharedCB;
     int  udpSocket  = tArg->udpSocket;
     int32_t bufSize = tArg->bufSize;
     bool debug      = tArg->debug;
@@ -380,8 +382,9 @@ static void *fillFifoThread(void *arg) {
     while (true) {
         // Create vector
         std::vector<char> vec;
-        // We can create vector capacity here, but not necessary
-        //vec.reserve(bufSize);
+        // We create vector capacity here, necessary if we're going to use backing array
+        // instead of using "push_back()", which we do in the getReassembledBuffer routine.
+        vec.reserve(bufSize);
 
         // Fill vector with data. Insert data about packet order.
         nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
@@ -409,6 +412,7 @@ static void *drainFifoThread(void *arg) {
 
     auto stats    = tArg->stats;
     auto sharedQ  = tArg->sharedQ;
+    auto sharedCB = tArg->sharedCB;
     bool debug    = tArg->debug;
 
     uint32_t delay, totalPkts, pktSequence;
@@ -417,9 +421,10 @@ static void *drainFifoThread(void *arg) {
     while (true) {
         // Get vector from the queue
         std::vector<char> vec;
-        sharedQ->pop(vec);
 
+        sharedQ->pop(vec);
         char *buf = vec.data();
+
         ejfat::parsePacketData(buf, &delay, &totalPkts, &pktSequence);
 
         if (debug) {
@@ -455,7 +460,7 @@ int main(int argc, char **argv) {
     float pidError = 0.F;
     float setPoint = 0.F;   // set fifo to 1/2 full by default
 
-    uint16_t cpPort = 56789;
+    uint16_t cpPort = 50051;
     bool debug = false;
     bool useIPv6 = false;
 
@@ -583,6 +588,7 @@ int main(int argc, char **argv) {
 
     // Fifo/queue in which to hold reassembled buffers
     auto sharedQ = std::make_shared<ejfat::queue<std::vector<char>>>(fifoCapacity);
+    auto sharedCB = std::make_shared<moodycamel::BlockingReaderWriterCircularBuffer<std::vector<char>>>(fifoCapacity);
 
 
     threadArg *targ = (threadArg *) calloc(1, sizeof(threadArg));
@@ -593,6 +599,7 @@ int main(int argc, char **argv) {
 
     targ->stats = stats;
     targ->sharedQ = sharedQ;
+    targ->sharedCB = sharedCB;
     targ->udpSocket = udpSocket;
     targ->bufSize = bufSize;
     targ->debug = debug;
