@@ -314,6 +314,7 @@ std::cout << "De-registered client token " << request->sessiontoken() << std::en
          * @param bPort        data-receiving port of this backend client.
          * @param bPortRange   range of data-receiving ports for this backend client.
          * @param cliName      name of this backend.
+         * @param token        authentication token.
          * @param bufferSize   byte size of each buffer (fifo entry) in this backend.
          * @param bufferCount  number of buffers in fifo.
          * @param setPoint     PID loop set point (% of fifo).
@@ -322,10 +323,12 @@ std::cout << "De-registered client token " << request->sessiontoken() << std::en
         LbControlPlaneClient::LbControlPlaneClient(
                              const std::string& cIP, uint16_t cPort,
                              const std::string& bIP, uint16_t bPort,
-                             PortRange bPortRange, const std::string& cliName,
+                             PortRange bPortRange,
+                             const std::string& cliName, const std::string& token,
                              uint32_t bufferSize, uint32_t bufferCount, float setPoint) :
+                             
                              cpAddr(cIP), cpPort(cPort), beAddr(bIP), bePort(bPort),
-                             beRange(bPortRange), name(cliName),
+                             beRange(bPortRange), name(cliName), authToken(token),
                              bufSizeBytes(bufferSize), bufCount(bufferCount), setPointPercent(setPoint) {
                 
 		    cpTarget = cIP + ":" + std::to_string(cPort);
@@ -357,7 +360,7 @@ std::cout << "De-registered client token " << request->sessiontoken() << std::en
 		    // Registration message we are sending to server
 		    RegisterRequest request;
 
-            request.set_authtoken(name);
+            request.set_authtoken(authToken);
             request.set_name(name);
 
             // Get # of cores (0 if unknown) (since C++ 11)
@@ -491,6 +494,7 @@ std::cout << "De-registered client token " << request->sessiontoken() << std::en
         const std::string & LbControlPlaneClient::getCpAddr()    const   {return cpAddr;}
         const std::string & LbControlPlaneClient::getDataAddr()  const   {return beAddr;}
         const std::string & LbControlPlaneClient::getName()      const   {return name;}
+        const std::string & LbControlPlaneClient::getToken()     const   {return authToken;}
 
         uint16_t   LbControlPlaneClient::getCpPort()             const   {return cpPort;}
         uint16_t   LbControlPlaneClient::getDataPort()           const   {return bePort;}

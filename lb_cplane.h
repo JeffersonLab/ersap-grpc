@@ -224,7 +224,8 @@ class LbControlPlaneClient {
         
         LbControlPlaneClient(const std::string& cpIP, uint16_t cpPort,
                              const std::string& beIP, uint16_t bePort,
-                             PortRange bePortRange, const std::string& _name,
+                             PortRange bePortRange,
+                             const std::string& _name, const std::string& _token,
                              uint32_t _bufferSize, uint32_t _bufferCount, float _setPoint);
         
       	int Register();
@@ -236,6 +237,7 @@ class LbControlPlaneClient {
         const std::string & getCpAddr()    const;
         const std::string & getDataAddr()  const;
         const std::string & getName()      const;
+        const std::string & getToken()     const;
 
         uint16_t  getCpPort()           const;
         uint16_t  getDataPort()         const;
