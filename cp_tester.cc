@@ -91,12 +91,13 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
+            "        [-token <authentication token (for registration)>]",
 
             "        [-cp_addr <control plane IP address>]",
             "        [-cp_port <control plane port>]",
@@ -126,6 +127,7 @@ static void printHelp(char *programName) {
  * @param port          filled with UDP receiving data port to listen on.
  * @param range         filled with range of ports in powers of 2 (entropy).
  * @param listenAddr    filled with IP address to listen on for LB data.
+ * @param token         filled with authenication token of backend for CP.
  * @param bufSize       filled with byte size of internal bufs to hold incoming events.
  * @param fifoSize      filled with max fifo size.
  * @param debug         filled with debug flag.
@@ -135,7 +137,8 @@ static void printHelp(char *programName) {
  */
 static void parseArgs(int argc, char **argv,
                       uint32_t *clientId, float *setPt, uint16_t *cpPort,
-                      uint16_t *port, int *range, char *listenAddr,
+                      uint16_t *port, int *range,
+                      char *listenAddr, char *token,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName) {
 
@@ -152,6 +155,7 @@ static void parseArgs(int argc, char **argv,
                           {"name",     1, nullptr, 6},
                           {"id",       1, nullptr, 7},
                           {"range",    1, nullptr, 8},
+                          {"token",    1, nullptr, 9},
                           {0,       0, 0,    0}
             };
 
@@ -301,6 +305,16 @@ static void parseArgs(int argc, char **argv,
                     exit(-1);
                 }
                 strcpy(clientName, optarg);
+                break;
+
+            case 9:
+                // authentication token
+                if (strlen(optarg) > 255 || strlen(optarg) < 1) {
+                    fprintf(stderr, "authentication token cannot be blank or > 255 chars, %s\n\n", optarg);
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                strcpy(token, optarg);
                 break;
 
             case 'v':
@@ -460,8 +474,11 @@ int main(int argc, char **argv) {
     char listeningAddr[16];
     memset(listeningAddr, 0, 16);
 
+    char authToken[256];
+    memset(authToken, 0, 256);
+
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
-              listeningAddr, &bufSize, &fifoCapacity, &debug, &useIPv6, cpAddr,  clientName);
+              listeningAddr, authToken, &bufSize, &fifoCapacity, &debug, &useIPv6, cpAddr,  clientName);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -610,7 +627,8 @@ int main(int argc, char **argv) {
     // Create grpc client of control plane
     LbControlPlaneClient client(cpAddr, cpPort,
                                 listeningAddr, port, pRange,
-                                clientName, bufSize, fifoCapacity, setPoint);
+                                clientName, authToken,
+                                bufSize, fifoCapacity, setPoint);
 
     // Register this client with the grpc server
     int32_t err = client.Register();

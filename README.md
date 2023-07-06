@@ -48,7 +48,7 @@ It can also send sync data to the cp_server and depends on the ejfat_grpc librar
 
 To help in setting things up, here is a suggestion that will allow data to flow slowly
 enough and be processed even more slowly to allow the cp_tester's fifo to fill up over
-the coarse of several seconds. Note that the CP is at addr = 172.19.22.244 and the host
+the coarse of several seconds. Note that the LB is at addr = 172.19.22.244 and the host
 is at addr = 172.19.22.15
 
 1) **cp_server** -p 56789
