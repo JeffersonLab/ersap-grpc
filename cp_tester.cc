@@ -597,7 +597,6 @@ int main(int argc, char **argv) {
 
     targ->stats = stats;
     targ->sharedQ = sharedQ;
-    targ->sharedCB = sharedCB;
     targ->udpSocket = udpSocket;
     targ->bufSize = bufSize;
     targ->debug = debug;
