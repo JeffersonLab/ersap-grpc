@@ -587,7 +587,6 @@ int main(int argc, char **argv) {
 
     // Fifo/queue in which to hold reassembled buffers
     auto sharedQ = std::make_shared<ejfat::queue<std::vector<char>>>(fifoCapacity);
-    auto sharedCB = std::make_shared<moodycamel::BlockingReaderWriterCircularBuffer<std::vector<char>>>(fifoCapacity);
 
 
     threadArg *targ = (threadArg *) calloc(1, sizeof(threadArg));
