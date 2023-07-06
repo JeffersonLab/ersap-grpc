@@ -258,16 +258,16 @@ static void parseArgs(int argc, char **argv,
                     sp = (float) std::stof(optarg, nullptr);
                 }
                 catch (const std::invalid_argument& ia) {
-                    fprintf(stderr, "Invalid argument to -s, 0.0 <= PID set point <= 100.0\n\n");
+                    fprintf(stderr, "Invalid argument to -s, 0.0 <= PID set point <= 1.0\n\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
 
-                if (sp >= 0. && sp <= 100.) {
+                if (sp >= 0. && sp <= 1.) {
                     *setPt = sp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -s, 0 <= PID set point <= 100\n\n");
+                    fprintf(stderr, "Invalid argument to -s, 0.0 <= PID set point <= 1.0\n\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
@@ -697,7 +697,7 @@ int main(int argc, char **argv) {
             fillAvg = runningFillTotal / loopMax;
         }
 
-        fillPercent = fillAvg/fifoCapacity*100;
+        fillPercent = fillAvg/fifoCapacity;
 
         // PID error
         pidError = pid(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
