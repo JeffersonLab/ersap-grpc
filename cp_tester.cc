@@ -742,13 +742,13 @@ int main(int argc, char **argv) {
                 // until the startup time (loopMax loops) is over.
                 continue;
             }
-            fillAvg = runningFillTotal / loopMax;
+            fillAvg = runningFillTotal / static_cast<float>(loopMax);
         }
         else {
-            fillAvg = runningFillTotal / loopMax;
+            fillAvg = runningFillTotal / static_cast<float>(loopMax);
         }
 
-        fillPercent = fillAvg/fifoCapacity;
+        fillPercent = fillAvg / static_cast<float>(fifoCapacity);
 
         // PID error
         pidError = pid(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
@@ -756,7 +756,7 @@ int main(int argc, char **argv) {
         // Every "loopMax" loops
         if (--loopCount <= 0) {
             // Update the changing variables
-            client.update(fillAvg, pidError);
+            client.update(fillPercent, pidError);
 
             // Send to server
             err = client.SendState();
