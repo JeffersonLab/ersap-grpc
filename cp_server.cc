@@ -506,6 +506,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    std::cout << "Listening for syncs on port " << sport << std::endl;
+
     /////////////////////////
     /// Start sync Thread ///
     /////////////////////////

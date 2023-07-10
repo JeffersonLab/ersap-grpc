@@ -91,13 +91,14 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
             "        [-token <authentication token (for registration)>]",
+            "        [-file <fileName to hold output>]",
 
             "        [-cp_addr <control plane IP address>]",
             "        [-cp_port <control plane port (default 50051)>]",
@@ -128,6 +129,7 @@ static void printHelp(char *programName) {
  * @param range         filled with range of ports in powers of 2 (entropy).
  * @param listenAddr    filled with IP address to listen on for LB data.
  * @param token         filled with authenication token of backend for CP.
+ * @param filename      filled with name of file to hold program output instead of stdout.
  * @param bufSize       filled with byte size of internal bufs to hold incoming events.
  * @param fifoSize      filled with max fifo size.
  * @param debug         filled with debug flag.
@@ -138,7 +140,7 @@ static void printHelp(char *programName) {
 static void parseArgs(int argc, char **argv,
                       uint32_t *clientId, float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range,
-                      char *listenAddr, char *token,
+                      char *listenAddr, char *token, char *fileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName) {
 
@@ -156,6 +158,7 @@ static void parseArgs(int argc, char **argv,
                           {"id",       1, nullptr, 7},
                           {"range",    1, nullptr, 8},
                           {"token",    1, nullptr, 9},
+                          {"file",     1, nullptr, 10},
                           {0,       0, 0,    0}
             };
 
@@ -317,6 +320,16 @@ static void parseArgs(int argc, char **argv,
                 strcpy(token, optarg);
                 break;
 
+            case 10:
+                // file name
+                if (strlen(optarg) > 128 || strlen(optarg) < 1) {
+                    fprintf(stderr, "filename too long/short, %s\n\n", optarg);
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                strcpy(fileName, optarg);
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -349,6 +362,8 @@ typedef struct threadArg_t {
     int  udpSocket;
     uint32_t bufSize;
     bool debug;
+    bool writeToFile;
+    FILE *fp;
 } threadArg;
 
 
@@ -363,11 +378,13 @@ static void *fillFifoThread(void *arg) {
 
     threadArg *tArg = (threadArg *) arg;
 
-    auto stats      = tArg->stats;
-    auto sharedQ    = tArg->sharedQ;
-    int  udpSocket  = tArg->udpSocket;
-    int32_t bufSize = tArg->bufSize;
-    bool debug      = tArg->debug;
+    auto stats       = tArg->stats;
+    auto sharedQ     = tArg->sharedQ;
+    int  udpSocket   = tArg->udpSocket;
+    int32_t bufSize  = tArg->bufSize;
+    bool writeToFile = tArg->debug;
+    bool debug       = tArg->debug;
+    FILE *fp         = tArg->fp;
 
     uint32_t tickPrescale = 1;
     uint64_t tick;
@@ -387,7 +404,8 @@ static void *fillFifoThread(void *arg) {
         // Fill vector with data. Insert data about packet order.
         nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
         if (nBytes < 0) {
-            fprintf(stderr, "Error in getReassembledBuffer, %ld\n", nBytes);
+            if (writeToFile) fprintf(fp, "Error in getReassembledBuffer, %ld\n", nBytes);
+            perror("Error in getReassembledBuffer");
             exit(1);
         }
 
@@ -411,6 +429,7 @@ static void *drainFifoThread(void *arg) {
     auto stats    = tArg->stats;
     auto sharedQ  = tArg->sharedQ;
     bool debug    = tArg->debug;
+    FILE *fp      = tArg->fp;
 
     uint32_t delay, totalPkts, pktSequence;
 
@@ -427,14 +446,14 @@ static void *drainFifoThread(void *arg) {
         if (debug) {
             // Print out the packet sequence in the order they arrived.
             // This data was placed into buf in the getReassembledBuffer() routine (see fillFifoThread thread above).
-            printf("Pkt delay %u usec, %u total pkts, arrival sequence:\n", delay, totalPkts);
+            fprintf(fp, "Pkt delay %u usec, %u total pkts, arrival sequence:\n", delay, totalPkts);
 
             uint32_t seq;
             for (int i=0; i < totalPkts; i++) {
                 seq = buf[12 + 4*i];
-                printf(" %u", seq);
+                fprintf(fp, " %u", seq);
             }
-            printf("\n");
+            fprintf(fp, "\n");
         }
 
         // Delay to simulate data processing
@@ -460,6 +479,7 @@ int main(int argc, char **argv) {
     uint16_t cpPort = 50051;
     bool debug = false;
     bool useIPv6 = false;
+    bool writeToFile = false;
 
     int range;
     uint16_t port = 17750;
@@ -476,11 +496,15 @@ int main(int argc, char **argv) {
     char listeningAddr[16];
     memset(listeningAddr, 0, 16);
 
+    char fileName[128];
+    memset(fileName, 0, 128);
+
     char authToken[256];
     memset(authToken, 0, 256);
 
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
-              listeningAddr, authToken, &bufSize, &fifoCapacity, &debug, &useIPv6, cpAddr,  clientName);
+              listeningAddr, authToken, fileName, &bufSize, &fifoCapacity,
+              &debug, &useIPv6, cpAddr,  clientName);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -492,8 +516,25 @@ int main(int argc, char **argv) {
     auto pRange = PortRange(range);
 
     ///////////////////////////////////
-    ///    Listening UDP socket    ///
-    //////////////////////////////////
+    ///       output to file        ///
+    ///////////////////////////////////
+
+    // By default output goes to stderr
+    FILE *fp = stderr;
+
+    // else send to file
+    if (strlen(fileName) > 0) {
+        fp = fopen(fileName, "w");
+        if (!fp) {
+            fprintf(stderr, "file open failed: %s\n", strerror(errno));
+            return(1);
+        }
+        writeToFile = true;
+    }
+
+    ///////////////////////////////////
+    ///    Listening UDP socket     ///
+    ///////////////////////////////////
 
     int udpSocket;
     int recvBufSize = 25000000;
@@ -503,8 +544,9 @@ int main(int argc, char **argv) {
 
         // Create IPv6 UDP socket
         if ((udpSocket = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
+            if (writeToFile) fprintf(fp, "error creating IPv6 client socket\n");
             perror("creating IPv6 client socket");
-            return -1;
+            return(1);
         }
 
         // Set & read back UDP receive buffer size
@@ -512,7 +554,7 @@ int main(int argc, char **argv) {
         setsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, sizeof(recvBufSize));
         recvBufSize = 0;
         getsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, &size);
-        if (debug) fprintf(stderr, "UDP socket recv buffer = %d bytes\n", recvBufSize);
+        if (debug) fprintf(fp, "UDP socket recv buffer = %d bytes\n", recvBufSize);
 
         int optval = 1;
         setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
@@ -534,15 +576,17 @@ int main(int argc, char **argv) {
         // Bind socket with address struct
         int err = bind(udpSocket, (struct sockaddr *) &serverAddr6, sizeof(serverAddr6));
         if (err != 0) {
-            if (debug) fprintf(stderr, "bind socket error\n");
-            return -1;
+            if (writeToFile) fprintf(fp, "error binding socket\n");
+            perror("bind socket error");
+            return(1);
         }
     }
     else {
         // Create UDP socket
         if ((udpSocket = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+            if (writeToFile) fprintf(fp, "error creating IPv4 client socket\n");
             perror("creating IPv4 client socket");
-            return -1;
+            return(1);
         }
 
         // Set & read back UDP receive buffer size
@@ -550,7 +594,7 @@ int main(int argc, char **argv) {
         setsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, sizeof(recvBufSize));
         recvBufSize = 0;
         getsockopt(udpSocket, SOL_SOCKET, SO_RCVBUF, &recvBufSize, &size);
-        fprintf(stderr, "UDP socket recv buffer = %d bytes\n", recvBufSize);
+        fprintf(fp, "UDP socket recv buffer = %d bytes\n", recvBufSize);
 
         int optval = 1;
         setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
@@ -571,8 +615,9 @@ int main(int argc, char **argv) {
         // Bind socket with address struct
         int err = bind(udpSocket, (struct sockaddr *) &serverAddr, sizeof(serverAddr));
         if (err != 0) {
-            fprintf(stderr, "bind socket error\n");
-            return -1;
+            if (writeToFile) fprintf(fp, "error binding socket\n");
+            perror("bind socket error");
+            return(1);
         }
     }
 
@@ -589,28 +634,33 @@ int main(int argc, char **argv) {
 
     threadArg *targ = (threadArg *) calloc(1, sizeof(threadArg));
     if (targ == nullptr) {
-        fprintf(stderr, "out of mem\n");
-        return -1;
+        if (writeToFile) fprintf(fp, "out of mem\n");
+        perror("out of mem");
+        return(1);
     }
 
     targ->stats = stats;
+    targ->bufSize = bufSize;
     targ->sharedQ = sharedQ;
     targ->udpSocket = udpSocket;
-    targ->bufSize = bufSize;
+    targ->writeToFile = writeToFile;
     targ->debug = debug;
+    targ->fp = fp;
 
     pthread_t thdFill;
     int status = pthread_create(&thdFill, NULL, fillFifoThread, (void *) targ);
     if (status != 0) {
-        fprintf(stderr, "\n ******* error creating fill thread\n\n");
-        return -1;
+        if (writeToFile) fprintf(fp, "error creating fill thread\n");
+        perror("error creating fill thread");
+        return(1);
     }
 
     pthread_t thdDrain;
     status = pthread_create(&thdDrain, NULL, drainFifoThread, (void *) targ);
     if (status != 0) {
-        fprintf(stderr, "\n ******* error creating drain thread\n\n");
-        return -1;
+        if (writeToFile) fprintf(fp, "error creating drain thread\n");
+        perror("error creating drain thread");
+        return(1);
     }
 
     ////////////////////////////
@@ -635,11 +685,12 @@ int main(int argc, char **argv) {
     // Register this client with the grpc server
     int32_t err = client.Register();
     if (err == -1) {
-        printf("GRPC client %s is already registered!\n", clientName);
+        fprintf(fp, "GRPC client %s is already registered!\n", clientName);
     }
     else if (err == 1) {
-        printf("GRPC client %s communication error with server when registering, exit!\n", clientName);
-        exit(1);
+        if (writeToFile) fprintf(fp, "GRPC client %s communication error with server when registering, exit!\n", clientName);
+        perror("GRPC client communication error with server when registering");
+        return(1);
     }
 
     // Add stuff to prevent anti-aliasing.
@@ -710,11 +761,12 @@ int main(int argc, char **argv) {
             // Send to server
             err = client.SendState();
             if (err == 1) {
-                printf("GRPC client %s communication error with server during sending of data!\n", clientName);
+                fprintf(fp, "GRPC client %s communication error with server during sending of data!\n", clientName);
                 break;
             }
 
-            printf("Fifo %d%% filled, %d avg level, pid err %f\n", (int)fillPercent, (int)fillAvg, pidError);
+            fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int)(fillPercent*100), (int)fillAvg, pidError);
+            fflush(fp);
 
             loopCount = loopMax;
         }
@@ -723,10 +775,11 @@ int main(int argc, char **argv) {
     // Unregister this client with the grpc server
     err = client.Deregister();
     if (err == 1) {
-        printf("GRPC client %s communication error with server when unregistering, exit!\n", clientName);
+        if (writeToFile) fprintf(fp, "GRPC client %s communication error with server when deregistering, exit!\n", clientName);
+        perror("GRPC client communication error with server when deregistering");
+        return(1);
     }
-    exit(1);
 
-
-    return 0;
+    fprintf(fp, "GRPC client %s deregistered\n", clientName);
+    return(0);
 }
