@@ -91,7 +91,7 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -102,9 +102,7 @@ static void printHelp(char *programName) {
 
             "        [-cp_addr <control plane IP address>]",
             "        [-cp_port <control plane port (default 50051)>]",
-
             "        [-name <backend name>]",
-            "        [-id <backend id#>]",
 
             "        [-b <internal buf size to hold event (150kB default)>]",
             "        [-fifo <fifo size (1000 default)>]",
@@ -122,7 +120,6 @@ static void printHelp(char *programName) {
  *
  * @param argc          arg count from main().
  * @param argv          arg list from main().
- * @param clientId      filled with id# of this grpc client (backend) to send to control plane.
  * @param setPt         filled with the set point of PID loop used with fifo fill level.
  * @param cpPort        filled with grpc server (control plane) port to info to.
  * @param port          filled with UDP receiving data port to listen on.
@@ -138,7 +135,7 @@ static void printHelp(char *programName) {
  * @param clientName    filled with name of this grpc client (backend) to send to control plane.
  */
 static void parseArgs(int argc, char **argv,
-                      uint32_t *clientId, float *setPt, uint16_t *cpPort,
+                      float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range,
                       char *listenAddr, char *token, char *fileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
@@ -156,7 +153,6 @@ static void parseArgs(int argc, char **argv,
                           {"cp_addr",  1, nullptr, 4},
                           {"cp_port",  1, nullptr, 5},
                           {"name",     1, nullptr, 6},
-                          {"id",       1, nullptr, 7},
                           {"range",    1, nullptr, 8},
                           {"token",    1, nullptr, 9},
                           {"file",     1, nullptr, 10},
@@ -275,19 +271,6 @@ static void parseArgs(int argc, char **argv,
                 }
                 else {
                     fprintf(stderr, "Invalid argument to -s, 0.0 <= PID set point <= 1.0\n\n");
-                    printHelp(argv[0]);
-                    exit(-1);
-                }
-                break;
-
-            case 7:
-                // grpc client id
-                i_tmp = (int) strtol(optarg, nullptr, 0);
-                if (i_tmp >= 0) {
-                    *clientId = i_tmp;
-                }
-                else {
-                    fprintf(stderr, "Invalid argument to -id, backend id must be >= 0\n\n");
                     printHelp(argv[0]);
                     exit(-1);
                 }
@@ -513,9 +496,6 @@ int main(int argc, char **argv) {
     ssize_t nBytes;
     uint32_t bufSize = 150000; // 150kB default
 
-    // Set this to max expected data size
-    uint32_t clientId = 0;
-
     float pidError = 0.F;
     float setPoint = 0.F;   // set fifo to 1/2 full by default
 
@@ -550,13 +530,15 @@ int main(int argc, char **argv) {
     char authToken[256];
     memset(authToken, 0, 256);
 
-    parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
+    parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, &bufSize, &fifoCapacity,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd);
 
     // give it a default name
     if (strlen(clientName) < 1) {
-        std::string name = "backend" + std::to_string(clientId);
+        // tack on int which is lowest 16 bits of current time
+        time_t localT = time(nullptr) & 0xffff;
+        std::string name = "backend" + std::to_string(localT);
         std::strcpy(clientName, name.c_str());
     }
 
