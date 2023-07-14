@@ -318,7 +318,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 11:
-                // PID set point for fifo fill
+                // Set the Kp PID loop parameter
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -331,7 +331,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 12:
-                // PID set point for fifo fill
+                // Set the Ki PID loop parameter
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -344,7 +344,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 13:
-                // PID set point for fifo fill
+                // Set the Kd PID loop parameter
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -510,7 +510,7 @@ int main(int argc, char **argv) {
     uint32_t fifoCapacity = 1000;
 
     // PID loop variables
-    float Kp = 0.8;
+    float Kp = 0.5;
     float Ki = 0.00;
     float Kd = 0.00;
 
