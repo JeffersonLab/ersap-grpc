@@ -142,7 +142,8 @@ static void parseArgs(int argc, char **argv,
                       uint16_t *port, int *range,
                       char *listenAddr, char *token, char *fileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
-                      bool *debug, bool *useIPv6, char *cpAddr, char *clientName) {
+                      bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
+                      float *kp, float *ki, float *kd) {
 
     int c, i_tmp;
     bool help = false;
@@ -159,6 +160,9 @@ static void parseArgs(int argc, char **argv,
                           {"range",    1, nullptr, 8},
                           {"token",    1, nullptr, 9},
                           {"file",     1, nullptr, 10},
+                          {"kp",       1, nullptr, 11},
+                          {"ki",       1, nullptr, 12},
+                          {"kd",       1, nullptr, 13},
                           {0,       0, 0,    0}
             };
 
@@ -330,6 +334,45 @@ static void parseArgs(int argc, char **argv,
                 strcpy(fileName, optarg);
                 break;
 
+            case 11:
+                // PID set point for fifo fill
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -kp\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                *kp = sp;
+                break;
+
+            case 12:
+                // PID set point for fifo fill
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -ki\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                *ki = sp;
+                break;
+
+            case 13:
+                // PID set point for fifo fill
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -kd\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                *kd = sp;
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -486,6 +529,11 @@ int main(int argc, char **argv) {
 
     uint32_t fifoCapacity = 1000;
 
+    // PID loop variables
+    float Kp = 0.8;
+    float Ki = 0.00;
+    float Kd = 0.00;
+
     char cpAddr[16];
     memset(cpAddr, 0, 16);
     strcpy(cpAddr, "172.19.22.15"); // ejfat-4 by default
@@ -504,7 +552,7 @@ int main(int argc, char **argv) {
 
     parseArgs(argc, argv, &clientId, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, &bufSize, &fifoCapacity,
-              &debug, &useIPv6, cpAddr,  clientName);
+              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -670,11 +718,7 @@ int main(int argc, char **argv) {
     LoadBalancerServiceImpl service;
     LoadBalancerServiceImpl *pGrpcService = &service;
 
-    // PID loop variables
-    const float Kp = 0.5;
-    const float Ki = 0.0;
-    const float Kd = 0.00;
-    const float deltaT = 1.0; // 1 millisec
+    const float deltaT = (1.0/1000.0); // 1 millisec
 
     // Create grpc client of control plane
     LbControlPlaneClient client(cpAddr, cpPort,
