@@ -84,7 +84,7 @@ static void printHelp(char *programName) {
             "        [-p <destination UDP port (default 19522)>]\n",
 
             "        [-cphost <control plane host (defauls 127.0.0.1)>]",
-            "        [-cpport <control plane sync msg port (default 50052)>]\n",
+            "        [-cpport <control plane sync msg port (default 19523)>]\n",
 
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
             "        [-mtu <desired MTU size>]",
@@ -606,7 +606,7 @@ int main(int argc, char **argv) {
     uint32_t offset = 0, sendBufSize = 0;
     uint32_t delay = 0, packetDelay = 0, bufferDelay = 0;
     uint64_t bufRate = 0L, bufSize = 62500L, byteRate = 0L;
-    uint16_t port = 0x4c42, cpport = 50052; // FPGA port is default
+    uint16_t port = 0x4c42, cpport = 0x4c43; // 19522 & 19523
     uint64_t tick = 0;
     int cores[10];
     int mtu, version = 2, protocol = 1, entropy = 0;
