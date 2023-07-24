@@ -91,18 +91,25 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
             "        [-token <authentication token (for registration)>]",
-            "        [-file <fileName to hold output>]",
+            "        [-file <fileName to hold output>]\n",
 
-            "        [-cp_addr <control plane IP address>]",
-            "        [-cp_port <control plane port (default 50051)>]",
-            "        [-name <backend name>]",
+            "        [-cp_addr <control plane IP address (default ejfat-2)>]",
+            "        [-cp_port <control plane grpc port (default 18347)>]",
+            "        [-name <backend name>]\n",
+
+            "        [-kp <PID proportional constant>]",
+            "        [-ki <PID integral constant>]",
+            "        [-kd <PID differential constant>]\n",
+
+            "        [-count <# of most recent fill values averaged, default 1000>]",
+            "        [-rtime <millisec for reporting fill to CP, default 1 sec>]\n",
 
             "        [-b <internal buf size to hold event (150kB default)>]",
             "        [-fifo <fifo size (1000 default)>]",
@@ -129,16 +136,22 @@ static void printHelp(char *programName) {
  * @param filename      filled with name of file to hold program output instead of stdout.
  * @param bufSize       filled with byte size of internal bufs to hold incoming events.
  * @param fifoSize      filled with max fifo size.
+ * @param fillCount     filled with # of fill level measurements to average together before sending.
+ * @param reportTime    filled with millisec between reports to CP.
  * @param debug         filled with debug flag.
  * @param useIPv6       filled with use IP version 6 flag.
  * @param cpAddr        filled with grpc server (control plane) IP address to info to.
  * @param clientName    filled with name of this grpc client (backend) to send to control plane.
+ * @param kp            filled with PID proportional constant.
+ * @param ki            filled with PID integral constant.
+ * @param kd            filled with PID differential constant.
  */
 static void parseArgs(int argc, char **argv,
                       float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range,
                       char *listenAddr, char *token, char *fileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
+                      uint32_t *fillCount, uint32_t *reportTime,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
                       float *kp, float *ki, float *kd) {
 
@@ -159,6 +172,8 @@ static void parseArgs(int argc, char **argv,
                           {"kp",       1, nullptr, 11},
                           {"ki",       1, nullptr, 12},
                           {"kd",       1, nullptr, 13},
+                          {"count",    1, nullptr, 14},
+                          {"rtime",    1, nullptr, 15},
                           {0,       0, 0,    0}
             };
 
@@ -356,6 +371,32 @@ static void parseArgs(int argc, char **argv,
                 *kd = sp;
                 break;
 
+            case 14:
+                // count = # of fill level values averaged together before reporting
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 0) {
+                    *cpPort = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -count, must be > 0\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                break;
+
+            case 15:
+                // reporting interval in millisec
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 0) {
+                    *cpPort = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -rtime, must be >= 1 ms\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -499,7 +540,7 @@ int main(int argc, char **argv) {
     float pidError = 0.F;
     float setPoint = 0.F;   // set fifo to 1/2 full by default
 
-    uint16_t cpPort = 50051;
+    uint16_t cpPort = 18347;
     bool debug = false;
     bool useIPv6 = false;
     bool writeToFile = false;
@@ -514,9 +555,14 @@ int main(int argc, char **argv) {
     float Ki = 0.00;
     float Kd = 0.00;
 
+    // # of fill values to average when reporting to grpc
+    uint32_t fcount = 1000;
+    // time period in millisec for reporting to CP
+    uint32_t reportTime = 1000;
+
     char cpAddr[16];
     memset(cpAddr, 0, 16);
-    strcpy(cpAddr, "172.19.22.15"); // ejfat-4 by default
+    strcpy(cpAddr, "129.57.177.144"); // ejfat-2 by default
 
     char clientName[31];
     memset(clientName, 0, 31);
@@ -531,7 +577,8 @@ int main(int argc, char **argv) {
     memset(authToken, 0, 256);
 
     parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
-              listeningAddr, authToken, fileName, &bufSize, &fifoCapacity,
+              listeningAddr, authToken, fileName,
+              &bufSize, &fifoCapacity, &fcount, &reportTime,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd);
 
     // give it a default name
@@ -720,22 +767,25 @@ int main(int argc, char **argv) {
     }
 
     // Add stuff to prevent anti-aliasing.
-    // If sampling every millisec, an individual reading sent every 1 sec
-    // will NOT be an accurate representation. It will include a lot of noise. To prevent this,
+    // If sampling fifo level every millisec but that level is changing much more quickly,
+    // the sent value will NOT be an accurate representation. It will include a lot of noise.
+    // To prevent this,
     // keep a running average of the fill %, so its reported value is a more accurate portrayal
     // of what's really going on. In this case a running avg is taken over the reporting time.
 
-    int loopMax   = 1000;
-    int loopCount = loopMax;  // loopMax loops of waitMicroSecs microseconds
-    int waitMicroSecs = 1000; // By default, loop every millisec
+    int sampleMicroSecs = 1000; // Sample data every 1 millisec
+    // # of loops (samples) to comprise one reporting period =
+    int loopMax   = 1000 * reportTime / sampleMicroSecs; // remember, report time is in millisec
+    int loopCount = loopMax;    // use to track # loops made
+
 
     float runningFillTotal = 0., fillAvg;
-    float fillValues[loopMax];
-    memset(fillValues, 0, loopMax*sizeof(float));
+    float fillValues[fcount];
+    memset(fillValues, 0, fcount*sizeof(float));
 
-    // Keep circulating thru array. Highest index is loopMax - 1.
-    // The first time thru, we don't want to over-weight with (loopMax - 1) zero entries.
-    // So we read loopMax entries first, before we start keeping stats & reporting level.
+    // Keep circulating thru array. Highest index is fcount - 1.
+    // The first time thru, we don't want to over-weight with (fcount - 1) zero entries.
+    // So we read fcount entries first, before we start keeping stats & reporting level.
     float prevFill, curFill, fillPercent;
     bool startingUp = true;
     int fillIndex = 0, firstLoopCounter = 1;
@@ -744,7 +794,7 @@ int main(int argc, char **argv) {
     while (true) {
 
         // Delay between data points
-        std::this_thread::sleep_for(std::chrono::microseconds(waitMicroSecs));
+        std::this_thread::sleep_for(std::chrono::microseconds(sampleMicroSecs));
 
         // Read current fifo level
         curFill = sharedQ->size();
@@ -753,25 +803,25 @@ int main(int argc, char **argv) {
         // Store current val at this index
         fillValues[fillIndex++] = curFill;
         // Add current val and remove previous val at this index from the running total.
-        // That way we have added loopMax number of most recent entries at ony one time.
+        // That way we have added fcount number of most recent entries at ony one time.
         runningFillTotal += curFill - prevFill;
         // Find index for the next round
-        fillIndex = (fillIndex == loopMax) ? 0 : fillIndex;
+        fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
 
         if (startingUp) {
-            if (firstLoopCounter++ >= loopMax) {
-                // Done with first loopMax loops
+            if (firstLoopCounter++ >= fcount) {
+                // Done with first fcount loops
                 startingUp = false;
             }
             else {
                 // Don't start sending data or recording values
-                // until the startup time (loopMax loops) is over.
+                // until the startup time (fcount loops) is over.
                 continue;
             }
-            fillAvg = runningFillTotal / static_cast<float>(loopMax);
+            fillAvg = runningFillTotal / static_cast<float>(fcount);
         }
         else {
-            fillAvg = runningFillTotal / static_cast<float>(loopMax);
+            fillAvg = runningFillTotal / static_cast<float>(fcount);
         }
 
         fillPercent = fillAvg / static_cast<float>(fifoCapacity);
