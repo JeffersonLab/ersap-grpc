@@ -581,7 +581,7 @@ static void *thread(void *arg) {
         totalRate = ((double) (byteCount + RE_HEADER_BYTES*packetCount)) / time;
         totalAvgRate = ((double) (currTotalBytes + RE_HEADER_BYTES*currTotalPackets)) / totalT;
         printf(" Hdrs + Data:    %3.4g MB/s,  %3.4g Avg\n", totalRate, totalAvgRate);
-        printf(" Time:    %" PRId64 + " epoch millisec,  total events: %" PRId64 + "\n\n", absTime, totalBufs);
+        printf(" Time:    %" PRId64 " epoch millisec,  total events: %" PRId64 "\n\n", absTime, totalBufs);
 
         t1 = t2;
     }
