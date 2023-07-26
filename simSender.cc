@@ -519,7 +519,8 @@ static void *thread(void *arg) {
     bool skipFirst = true;
 
     double rate, avgRate, totalRate, totalAvgRate;
-    int64_t totalT = 0, time, absTime;
+    int64_t totalT = 0, time;
+    uint64_t absTime;
     struct timespec t1, t2, firstT;
 
     // Get the current time
@@ -581,7 +582,7 @@ static void *thread(void *arg) {
         totalRate = ((double) (byteCount + RE_HEADER_BYTES*packetCount)) / time;
         totalAvgRate = ((double) (currTotalBytes + RE_HEADER_BYTES*currTotalPackets)) / totalT;
         printf(" Hdrs + Data:    %3.4g MB/s,  %3.4g Avg\n", totalRate, totalAvgRate);
-        printf(" Time:    %" PRId64 " epoch millisec,  total events: %" PRId64 "\n\n", absTime, totalBufs);
+        printf(" Time:    %" PRIu64 " epoch millisec,  total events: %" PRIu64 "\n\n", absTime, totalBufs);
 
         t1 = t2;
     }

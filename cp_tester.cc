@@ -420,6 +420,10 @@ static void parseArgs(int argc, char **argv,
 }
 
 
+// Statistics
+static volatile uint64_t totalBufs=0;
+
+
 
 // Arg to pass to fifo fill/drain threads
 typedef struct threadArg_t {
@@ -475,6 +479,8 @@ static void *fillFifoThread(void *arg) {
             perror("Error in getReassembledBuffer");
             exit(1);
         }
+
+        totalBufs++;
 
         // Move this vector into the queue
         sharedQ->push(std::move(vec));
@@ -790,6 +796,12 @@ int main(int argc, char **argv) {
     bool startingUp = true;
     int fillIndex = 0, firstLoopCounter = 1;
 
+    // time stuff
+    struct timespec tspec;
+    uint64_t absTime, prevAbsTime;
+    clock_gettime(CLOCK_MONOTONIC, &tspec);
+    prevAbsTime = 1000L*(tspec.tv_sec) + (tspec.tv_nsec)/1000000L;
+
 
     while (true) {
 
@@ -841,11 +853,23 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int)(fillPercent*100), (int)fillAvg, pidError);
-            fflush(fp);
-
             loopCount = loopMax;
         }
+
+        // Print out every 4 seconds
+
+        // Get the current epoch time in millisec
+        clock_gettime(CLOCK_MONOTONIC, &tspec);
+        absTime = 1000L*(tspec.tv_sec) + (tspec.tv_nsec)/1000000L;
+
+        if (absTime - prevAbsTime >= 4000) {
+            prevAbsTime = absTime;
+            fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int) (fillPercent * 100), (int) fillAvg,
+                    pidError);
+            printf("Time: %" PRIu64 " epoch millisec, total events: %" PRIu64 "\n\n", absTime, totalBufs);
+            fflush(fp);
+        }
+
     }
 
     // Unregister this client with the grpc server
