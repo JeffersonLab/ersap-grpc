@@ -3,3 +3,4 @@
 *.pb.h
 cmake
 .idea
+cmake-*

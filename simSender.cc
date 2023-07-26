@@ -506,7 +506,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
 
 
 // Statistics
-static volatile uint64_t totalBytes=0, totalPackets=0;
+static volatile uint64_t totalBytes=0, totalPackets=0, totalBufs=0;
 
 
 // Thread to send to print out rates
@@ -519,7 +519,7 @@ static void *thread(void *arg) {
     bool skipFirst = true;
 
     double rate, avgRate, totalRate, totalAvgRate;
-    int64_t totalT = 0, time;
+    int64_t totalT = 0, time, absTime;
     struct timespec t1, t2, firstT;
 
     // Get the current time
@@ -534,8 +534,11 @@ static void *thread(void *arg) {
         // Delay 4 seconds between printouts
         std::this_thread::sleep_for(std::chrono::seconds(4));
 
-        // Read time
+        // Read epoch time
         clock_gettime(CLOCK_MONOTONIC, &t2);
+        // Epoch time in milliseconds
+        absTime = 1000L*(t2.tv_sec) + (t2.tv_nsec)/1000000L;
+
         time = (1000000L * (t2.tv_sec - t1.tv_sec)) + ((t2.tv_nsec - t1.tv_nsec)/1000L);
         totalT = (1000000L * (t2.tv_sec - firstT.tv_sec)) + ((t2.tv_nsec - firstT.tv_nsec)/1000L);
 
@@ -577,8 +580,8 @@ static void *thread(void *arg) {
         // Data rates (with RE header info)
         totalRate = ((double) (byteCount + RE_HEADER_BYTES*packetCount)) / time;
         totalAvgRate = ((double) (currTotalBytes + RE_HEADER_BYTES*currTotalPackets)) / totalT;
-        printf(" Total:    %3.4g MB/s,  %3.4g Avg\n\n", totalRate, totalAvgRate);
-
+        printf(" Hdrs + Data:    %3.4g MB/s,  %3.4g Avg\n", totalRate, totalAvgRate);
+        printf(" Time:    %" PRId64 + " epoch millisec,  total events: %" PRId64 + "\n\n", absTime, totalBufs);
 
         t1 = t2;
     }
@@ -1037,6 +1040,7 @@ int main(int argc, char **argv) {
         }
 
         bufsSent++;
+        totalBufs++;
         totalBytes   += bufByteSize;
         totalPackets += packetsSent;
         offset = 0;
