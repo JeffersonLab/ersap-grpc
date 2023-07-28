@@ -104,9 +104,9 @@ static void printHelp(char *programName) {
             "        [-cp_port <control plane grpc port (default 18347)>]",
             "        [-name <backend name>]\n",
 
-            "        [-kp <PID proportional constant>]",
-            "        [-ki <PID integral constant>]",
-            "        [-kd <PID differential constant>]\n",
+            "        [-kp <PID proportional constant, default 0.8>]",
+            "        [-ki <PID integral constant, default 0.02>]",
+            "        [-kd <PID differential constant, default 0.001>]\n",
 
             "        [-count <# of most recent fill values averaged, default 1000>]",
             "        [-rtime <millisec for reporting fill to CP, default 1 sec>]\n",
@@ -557,8 +557,8 @@ int main(int argc, char **argv) {
     uint32_t fifoCapacity = 1000;
 
     // PID loop variables
-    float Kp = 0.5;
-    float Ki = 0.00;
+    float Kp = 0.8;
+    float Ki = 0.02;
     float Kd = 0.00;
 
     // # of fill values to average when reporting to grpc
