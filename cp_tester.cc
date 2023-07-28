@@ -375,7 +375,7 @@ static void parseArgs(int argc, char **argv,
                 // count = # of fill level values averaged together before reporting
                 i_tmp = (int) strtol(optarg, nullptr, 0);
                 if (i_tmp > 0) {
-                    *cpPort = i_tmp;
+                    *fillCount = i_tmp;
                 }
                 else {
                     fprintf(stderr, "Invalid argument to -count, must be > 0\n\n");
@@ -388,7 +388,7 @@ static void parseArgs(int argc, char **argv,
                 // reporting interval in millisec
                 i_tmp = (int) strtol(optarg, nullptr, 0);
                 if (i_tmp > 0) {
-                    *cpPort = i_tmp;
+                    *reportTime = i_tmp;
                 }
                 else {
                     fprintf(stderr, "Invalid argument to -rtime, must be >= 1 ms\n\n");
@@ -753,8 +753,6 @@ int main(int argc, char **argv) {
     LoadBalancerServiceImpl service;
     LoadBalancerServiceImpl *pGrpcService = &service;
 
-    const float deltaT = (1.0/1000.0); // 1 millisec
-
     // Create grpc client of control plane
     LbControlPlaneClient client(cpAddr, cpPort,
                                 listeningAddr, port, pRange,
@@ -779,6 +777,7 @@ int main(int argc, char **argv) {
     // keep a running average of the fill %, so its reported value is a more accurate portrayal
     // of what's really going on. In this case a running avg is taken over the reporting time.
 
+    float deltaT = (1.0/1000.0); // 1 millisec in seconds
     int sampleMicroSecs = 1000; // Sample data every 1 millisec
     // # of loops (samples) to comprise one reporting period =
     int loopMax   = 1000 * reportTime / sampleMicroSecs; // remember, report time is in millisec
@@ -797,10 +796,11 @@ int main(int argc, char **argv) {
     int fillIndex = 0, firstLoopCounter = 1;
 
     // time stuff
-    struct timespec tspec;
+    struct timespec t1, t2;
+    int64_t time;
     uint64_t absTime, prevAbsTime;
-    clock_gettime(CLOCK_MONOTONIC, &tspec);
-    prevAbsTime = 1000L*(tspec.tv_sec) + (tspec.tv_nsec)/1000000L;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    prevAbsTime = 1000L*(t1.tv_sec) + (t1.tv_nsec)/1000000L;
 
 
     while (true) {
@@ -826,6 +826,10 @@ int main(int argc, char **argv) {
                 startingUp = false;
             }
             else {
+                if (firstLoopCounter == fcount) {
+                    // Start the clock NOW
+                    clock_gettime(CLOCK_MONOTONIC, &t1);
+                }
                 // Don't start sending data or recording values
                 // until the startup time (fcount loops) is over.
                 continue;
@@ -838,8 +842,18 @@ int main(int argc, char **argv) {
 
         fillPercent = fillAvg / static_cast<float>(fifoCapacity);
 
+        // Read time
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        // time diff in microsec
+        time = (1000000L * (t2.tv_sec - t1.tv_sec)) + ((t2.tv_nsec - t1.tv_nsec)/1000L);
+        // convert to sec
+        deltaT = static_cast<float>(time)/1000000.F;
+        // Get the current epoch time in millisec
+        absTime = 1000L*t2.tv_sec + t2.tv_nsec/1000000L;
+        t1 = t2;
+
         // PID error
-        pidError = pid(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
+        pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
 
         // Every "loopMax" loops
         if (--loopCount <= 0) {
@@ -857,19 +871,13 @@ int main(int argc, char **argv) {
         }
 
         // Print out every 4 seconds
-
-        // Get the current epoch time in millisec
-        clock_gettime(CLOCK_MONOTONIC, &tspec);
-        absTime = 1000L*(tspec.tv_sec) + (tspec.tv_nsec)/1000000L;
-
         if (absTime - prevAbsTime >= 4000) {
             prevAbsTime = absTime;
             fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int) (fillPercent * 100), (int) fillAvg,
                     pidError);
-            printf("Time: %" PRIu64 " epoch millisec, total events: %" PRIu64 "\n\n", absTime, totalBufs);
+            fprintf(fp, "  Time: %" PRIu64 " epoch millisec, total events: %" PRIu64 "\n", absTime, totalBufs);
             fflush(fp);
         }
-
     }
 
     // Unregister this client with the grpc server
