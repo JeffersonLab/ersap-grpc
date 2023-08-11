@@ -618,15 +618,8 @@ static void *rateThread(void *arg) {
 
         pktRate = 1000000.0 * ((double) packetCount) / time;
         pktAvgRate = 1000000.0 * ((double) currTotalPackets) / totalT;
-        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec",
+        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec\n",
                 pktRate, pktAvgRate, time, absTime);
-        // Tack on cpu info
-        if (cpu > -1) {
-            printf(", cpu = %d\n", cpu);
-        }
-        else {
-            printf("\n");
-        }
 
         // Data rates (with NO header info)
         dataRate = ((double) byteCount) / time;
@@ -858,7 +851,7 @@ int main(int argc, char **argv) {
     targ->fp = fp;
 
     pthread_t thdFill;
-    int status = pthread_create(&thdFill, NULL, fillFifoThread, (void *) targ);
+    status = pthread_create(&thdFill, NULL, fillFifoThread, (void *) targ);
     if (status != 0) {
         if (writeToFile) fprintf(fp, "error creating fill thread\n");
         perror("error creating fill thread");
