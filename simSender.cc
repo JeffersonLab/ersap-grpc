@@ -941,14 +941,14 @@ int main(int argc, char **argv) {
         if (setByteRate) {
             // Fixed the BYTE rate when making performance measurements.
             bufRate = byteRate / bufSize;
-            fprintf(stderr, "packetBlaster: set byte rate = %" PRIu64 ", buf rate = %" PRId64 ", initial buf size = %" PRId64 "\n",
+            fprintf(stderr, "simSender: set byte rate = %" PRIu64 ", buf rate = %" PRId64 ", initial buf size = %" PRId64 "\n",
                     byteRate, bufRate, bufSize);
             // In this case we may need to adjust the buffer size to get the exact data rate.
             bufSize = byteRate / bufRate;
-            fprintf(stderr, "packetBlaster: set byte rate = %" PRIu64 ", buf rate = %" PRId64 ", adjusted buf size = %" PRId64 "\n",
+            fprintf(stderr, "simSender: set byte rate = %" PRIu64 ", buf rate = %" PRId64 ", adjusted buf size = %" PRId64 "\n",
                     byteRate, bufRate, bufSize);
 
-            fprintf(stderr, "packetBlaster: buf rate = %" PRIu64 ", buf size = %" PRIu64 ", data rate = %" PRId64 "\n",
+            fprintf(stderr, "simSender: buf rate = %" PRIu64 ", buf size = %" PRIu64 ", data rate = %" PRId64 "\n",
                     bufRate, bufSize, byteRate);
 
             buffersAtOnce = 500000 / bufSize;
@@ -961,7 +961,7 @@ int main(int argc, char **argv) {
             byteRate = bufRate * bufSize;
             buffersAtOnce = bytesToWriteAtOnce / bufSize;
 
-            fprintf(stderr, "packetBlaster: buf rate = %" PRIu64 ", buf size = %" PRIu64 ", data rate = %" PRId64 "\n",
+            fprintf(stderr, "simSender: buf rate = %" PRIu64 ", buf size = %" PRIu64 ", data rate = %" PRId64 "\n",
                     bufRate, bufSize, byteRate);
         }
 
@@ -970,7 +970,7 @@ int main(int argc, char **argv) {
         // musec to write data at desired rate
         microSecItShouldTake = 1000000L * bytesToWriteAtOnce / byteRate;
         fprintf(stderr,
-                "packetBlaster: bytesToWriteAtOnce = %" PRId64 ", byteRate = %" PRId64 ", buffersAtOnce = %" PRId64 ", microSecItShouldTake = %" PRId64 "\n",
+                "simSender: bytesToWriteAtOnce = %" PRId64 ", byteRate = %" PRId64 ", buffersAtOnce = %" PRId64 ", microSecItShouldTake = %" PRId64 "\n",
                 bytesToWriteAtOnce, byteRate, buffersAtOnce, microSecItShouldTake);
     }
 

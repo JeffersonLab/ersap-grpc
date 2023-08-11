@@ -422,8 +422,8 @@ static void parseArgs(int argc, char **argv,
 
 // Statistics
 static volatile uint64_t totalBytes=0, totalPackets=0, totalEvents=0;
-static std::atomic<uint32_t> droppedPackets;
-static std::atomic<uint32_t> droppedEvents;
+static std::atomic<uint32_t> droppedPackets {0};
+static std::atomic<uint32_t> droppedEvents {0};
 
 
 
