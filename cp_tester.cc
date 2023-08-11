@@ -421,7 +421,9 @@ static void parseArgs(int argc, char **argv,
 
 
 // Statistics
-static volatile uint64_t totalBufs=0;
+static volatile uint64_t totalBytes=0, totalPackets=0, totalEvents=0;
+static std::atomic<uint32_t> droppedPackets;
+static std::atomic<uint32_t> droppedEvents;
 
 
 
@@ -480,7 +482,15 @@ static void *fillFifoThread(void *arg) {
             exit(1);
         }
 
-        totalBufs++;
+        // Receiving stats
+
+        totalBytes   += nBytes;
+        totalPackets += stats->acceptedPackets;
+        totalEvents++;
+
+        // atomic
+        droppedEvents  += stats->droppedBuffers;
+        droppedPackets += stats->droppedPackets;
 
         // Move this vector into the queue
         sharedQ->push(std::move(vec));
@@ -499,7 +509,6 @@ static void *drainFifoThread(void *arg) {
 
     threadArg *tArg = (threadArg *) arg;
 
-    auto stats    = tArg->stats;
     auto sharedQ  = tArg->sharedQ;
     bool debug    = tArg->debug;
     FILE *fp      = tArg->fp;
@@ -536,6 +545,111 @@ static void *drainFifoThread(void *arg) {
     return nullptr;
 }
 
+
+// Thread to send to print out rates
+static void *rateThread(void *arg) {
+
+    uint64_t packetCount, byteCount, eventCount;
+    uint64_t prevTotalPackets, prevTotalBytes, prevTotalEvents;
+    uint64_t currTotalPackets, currTotalBytes, currTotalEvents;
+    // Ignore first rate calculation as it's most likely a bad value
+    bool skipFirst = true;
+
+    double pktRate, pktAvgRate, dataRate, dataAvgRate, totalRate, totalAvgRate, evRate, avgEvRate;
+    int64_t totalT = 0, time, droppedPkts, totalDroppedPkts = 0, droppedEvts, totalDroppedEvts = 0;
+    uint64_t absTime;
+    struct timespec t1, t2, firstT;
+
+    // Get the current time
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    firstT = t1;
+
+    while (true) {
+
+        prevTotalBytes   = totalBytes;
+        prevTotalPackets = totalPackets;
+        prevTotalEvents  = totalEvents;
+
+        // Delay 4 seconds between printouts
+        std::this_thread::sleep_for(std::chrono::seconds(4));
+
+        // Read time
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        // Epoch time in milliseconds
+        absTime = 1000L*(t2.tv_sec) + (t2.tv_nsec)/1000000L;
+        // time diff in microseconds
+        time = (1000000L * (t2.tv_sec - t1.tv_sec)) + ((t2.tv_nsec - t1.tv_nsec)/1000L);
+        totalT = (1000000L * (t2.tv_sec - firstT.tv_sec)) + ((t2.tv_nsec - firstT.tv_nsec)/1000L);
+
+        currTotalBytes   = totalBytes;
+        currTotalPackets = totalPackets;
+        currTotalEvents  = totalEvents;
+
+        if (skipFirst) {
+            // Don't calculate rates until data is coming in
+            if (currTotalPackets > 0) {
+                skipFirst = false;
+            }
+            firstT = t1 = t2;
+            totalT = totalBytes = totalPackets = totalEvents = 0;
+            continue;
+        }
+
+        // Use for instantaneous rates
+        byteCount   = currTotalBytes   - prevTotalBytes;
+        packetCount = currTotalPackets - prevTotalPackets;
+        eventCount  = currTotalEvents  - prevTotalEvents;
+
+        // Reset things if #s rolling over
+        if ( (byteCount < 0) || (totalT < 0) )  {
+            totalT = totalBytes = totalPackets = totalEvents = 0;
+            firstT = t1 = t2;
+            continue;
+        }
+
+        // Dropped stuff rates
+        droppedPkts = droppedPackets;
+        droppedPackets.store(0);
+        totalDroppedPkts += droppedPkts;
+
+        droppedEvts = droppedEvents;
+        droppedEvents.store(0);
+        totalDroppedEvts += droppedEvts;
+
+        pktRate = 1000000.0 * ((double) packetCount) / time;
+        pktAvgRate = 1000000.0 * ((double) currTotalPackets) / totalT;
+        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec",
+                pktRate, pktAvgRate, time, absTime);
+        // Tack on cpu info
+        if (cpu > -1) {
+            printf(", cpu = %d\n", cpu);
+        }
+        else {
+            printf("\n");
+        }
+
+        // Data rates (with NO header info)
+        dataRate = ((double) byteCount) / time;
+        dataAvgRate = ((double) currTotalBytes) / totalT;
+        // Data rates (with RE header info)
+        totalRate = ((double) (byteCount + HEADER_BYTES*packetCount)) / time;
+        totalAvgRate = ((double) (currTotalBytes + HEADER_BYTES*currTotalPackets)) / totalT;
+        printf("Data (+hdrs):  %3.4g (%3.4g) MB/s,  %3.4g (%3.4g) Avg\n", dataRate, totalRate, dataAvgRate, totalAvgRate);
+
+        // Event rates
+        evRate = 1000000.0 * ((double) eventCount) / time;
+        avgEvRate = 1000000.0 * ((double) currTotalEvents) / totalT;
+        printf("Events:        %3.4g Hz,  %3.4g Avg, total %" PRIu64 "\n", evRate, avgEvRate, totalEvents);
+
+        // Drop info
+        printf("Dropped: evts: %" PRId64 ", %" PRId64 " total, pkts: %" PRId64 ", %" PRId64 " total\n\n",
+                droppedEvts, totalDroppedEvts, droppedPkts, totalDroppedPkts);
+
+        t1 = t2;
+    }
+
+    return (nullptr);
+}
 
 
 int main(int argc, char **argv) {
@@ -702,6 +816,19 @@ int main(int argc, char **argv) {
             perror("bind socket error");
             return(1);
         }
+    }
+
+    ///////////////////////////////////
+    /// Start Stat Thread          ///
+    //////////////////////////////////
+
+    // Start thread to printout incoming data rate
+    pthread_t thd;
+    int status = pthread_create(&thd, NULL, rateThread, (void *) nullptr);
+    if (status != 0) {
+        if (writeToFile) fprintf(fp, "cannot start statistics thread\n");
+        perror("cannot start stat thd");
+        return(1);
     }
 
     ///////////////////////////////////
@@ -873,9 +1000,8 @@ int main(int argc, char **argv) {
         // Print out every 4 seconds
         if (absTime - prevAbsTime >= 4000) {
             prevAbsTime = absTime;
-            fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int) (fillPercent * 100), (int) fillAvg,
-                    pidError);
-            fprintf(fp, "  Time: %" PRIu64 " epoch millisec, total events: %" PRIu64 "\n", absTime, totalBufs);
+            fprintf(fp, "     Fifo %d%% filled, %d avg level, pid err %f\n",
+                    (int) (fillPercent * 100), (int) fillAvg, pidError);
             fflush(fp);
         }
     }
