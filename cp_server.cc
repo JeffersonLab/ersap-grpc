@@ -74,8 +74,8 @@ static void printHelp(char *programName) {
             "\nusage: %s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
-            "        [-p <grpc server port (default 50051)>]",
-            "        [-sport <sync msg port (default 50052)>]",
+            "        [-p <grpc server port (default 19523)>]",
+            "        [-sport <sync msg port (default 18347)>]",
             "        [-cores <comma-separated list of cores to run on>]");
 
     fprintf(stderr, "        This is a gRPC server getting requests/data from an ERSAP reasembly backend's gRPC client.\n");
@@ -404,7 +404,7 @@ static void *controlThread(void *arg) {
 int main(int argc, char **argv) {
 
     ssize_t nBytes;
-    uint16_t port = 50051, sport = 50052;
+    uint16_t port = 19523, sport = 18347;
     int cores[10];
     bool debug = false;
     bool useIPv6 = false;
