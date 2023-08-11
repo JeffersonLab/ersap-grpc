@@ -97,7 +97,7 @@ static void printHelp(char *programName) {
             "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration)>]",
-            "        [-token <authentication token (for registration)>]",
+            "        [-token <authentication token (for registration, default = udplbd_default_change_me)>]",
             "        [-file <fileName to hold output>]\n",
 
             "        [-cp_addr <control plane IP address (default ejfat-2)>]",
@@ -688,6 +688,7 @@ int main(int argc, char **argv) {
 
     char authToken[256];
     memset(authToken, 0, 256);
+    strcpy(authToken, "udplbd_default_change_me");
 
     parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName,
