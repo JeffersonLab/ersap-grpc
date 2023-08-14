@@ -35,9 +35,7 @@
 #include <random>
 #include <getopt.h>
 
-#include <atomic>
-#include <mutex>
-#include <condition_variable>
+//#include <atomic>
 
 
 #ifdef __linux__
@@ -445,10 +443,10 @@ static void parseArgs(int argc, char **argv,
 
 // Statistics
 static volatile uint64_t totalBytes=0, totalPackets=0, totalEvents=0;
-static std::atomic<uint32_t> droppedPackets {0};
-static std::atomic<uint32_t> droppedEvents {0};
-static std::atomic<uint32_t> droppedBytes {0};
-//static uint32_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
+//static std::atomic<uint32_t> droppedPackets {0};
+//static std::atomic<uint32_t> droppedEvents {0};
+//static std::atomic<uint32_t> droppedBytes {0};
+static uint32_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 
 
 
@@ -485,7 +483,6 @@ static void *fillFifoThread(void *arg) {
     FILE *fp         = tArg->fp;
 
     uint32_t tickPrescale = 1;
-    // TODO: the tick is the problem!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     uint64_t tick;
     uint16_t dataId;
     ssize_t  nBytes;
