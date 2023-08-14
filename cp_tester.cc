@@ -445,10 +445,10 @@ static void parseArgs(int argc, char **argv,
 
 // Statistics
 static volatile uint64_t totalBytes=0, totalPackets=0, totalEvents=0;
-//static std::atomic<uint32_t> droppedPackets {0};
-//static std::atomic<uint32_t> droppedEvents {0};
-static uint32_t droppedPackets {0};
-static uint32_t droppedEvents {0};
+static std::atomic<uint32_t> droppedPackets {0};
+static std::atomic<uint32_t> droppedEvents {0};
+static std::atomic<uint32_t> droppedBytes {0};
+//static uint32_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 
 
 
@@ -522,10 +522,11 @@ static void *fillFifoThread(void *arg) {
         totalEvents++;
 
         // atomic
+        droppedBytes   = stats->discardedBytes;
         droppedEvents  = stats->discardedBuffers;
         droppedPackets = stats->discardedPackets;
 
-        drPkts += stats->droppedPackets;
+        drPkts = stats->droppedPackets;
         if (drPkts > prevDrPkts) {
             printf("dropped = %u, tp = %" PRIu64 "\n", drPkts, totalPackets);
             prevDrPkts = drPkts;
@@ -591,6 +592,11 @@ static void *rateThread(void *arg) {
     uint64_t packetCount, byteCount, eventCount;
     uint64_t prevTotalPackets, prevTotalBytes, prevTotalEvents;
     uint64_t currTotalPackets, currTotalBytes, currTotalEvents;
+
+    uint64_t dropPacketCount, dropByteCount, dropEventCount;
+    uint64_t currDropTotalPackets, currDropTotalBytes, currDropTotalEvents;
+    uint64_t prevDropTotalPackets, prevDropTotalBytes, prevDropTotalEvents;
+
     // Ignore first rate calculation as it's most likely a bad value
     bool skipFirst = true;
 
@@ -609,6 +615,10 @@ static void *rateThread(void *arg) {
         prevTotalPackets = totalPackets;
         prevTotalEvents  = totalEvents;
 
+        prevDropTotalBytes   = droppedEvents;
+        prevDropTotalPackets = droppedPackets;
+        prevDropTotalEvents  = droppedEvents;
+
         // Delay 4 seconds between printouts
         std::this_thread::sleep_for(std::chrono::seconds(4));
 
@@ -624,6 +634,10 @@ static void *rateThread(void *arg) {
         currTotalPackets = totalPackets;
         currTotalEvents  = totalEvents;
 
+        currDropTotalBytes   = droppedEvents;
+        currDropTotalPackets = droppedPackets;
+        currDropTotalEvents  = droppedEvents;
+
         if (skipFirst) {
             // Don't calculate rates until data is coming in
             if (currTotalPackets > 0) {
@@ -631,6 +645,7 @@ static void *rateThread(void *arg) {
             }
             firstT = t1 = t2;
             totalT = totalBytes = totalPackets = totalEvents = 0;
+            droppedBytes = droppedPackets = droppedEvents = 0;
             continue;
         }
 
@@ -639,31 +654,17 @@ static void *rateThread(void *arg) {
         packetCount = currTotalPackets - prevTotalPackets;
         eventCount  = currTotalEvents  - prevTotalEvents;
 
+        dropByteCount   = currDropTotalBytes   - prevDropTotalBytes;
+        dropPacketCount = currDropTotalPackets - prevDropTotalPackets;
+        dropEventCount  = currDropTotalEvents  - prevDropTotalEvents;
+
         // Reset things if #s rolling over
         if ( (byteCount < 0) || (totalT < 0) )  {
             totalT = totalBytes = totalPackets = totalEvents = 0;
+            droppedBytes = droppedPackets = droppedEvents = 0;
             firstT = t1 = t2;
             continue;
         }
-
-
-
-
-// TODO: This is WRONG, droppedPackets is cumulative !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        // Dropped stuff rates
-        droppedPkts = droppedPackets;
-        //droppedPackets.store(0);
-        droppedPackets = 0;
-        totalDroppedPkts += droppedPkts;
-
-        droppedEvts = droppedEvents;
-        //droppedEvents.store(0);
-        droppedEvents = 0;
-        totalDroppedEvts += droppedEvts;
-
-
-
-
 
         pktRate = 1000000.0 * ((double) packetCount) / time;
         pktAvgRate = 1000000.0 * ((double) currTotalPackets) / totalT;
@@ -687,8 +688,8 @@ static void *rateThread(void *arg) {
         printf("Events:        %3.4g Hz,  %3.4g Avg, total %" PRIu64 "\n", evRate, avgEvRate, totalEvents);
 
         // Drop info
-        printf("Dropped: evts: %" PRId64 ", %" PRId64 " total, pkts: %" PRId64 ", %" PRId64 " total\n\n",
-                droppedEvts, totalDroppedEvts, droppedPkts, totalDroppedPkts);
+        printf("Dropped: evts: %" PRIu64 ", %" PRIu64 " total, pkts: %" PRIu64 ", %" PRIu64 " total\n\n",
+                dropEventCount, currDropTotalEvents, dropPacketCount, currDropTotalPackets);
 
         t1 = t2;
     }

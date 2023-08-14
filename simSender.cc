@@ -974,6 +974,7 @@ int main(int argc, char **argv) {
                 bytesToWriteAtOnce, byteRate, buffersAtOnce, microSecItShouldTake);
     }
 
+    fprintf(stdout, "buf size = %u\n", (uint32_t)bufSize);
 
     if (setByteRate || setBufRate || sendSync) {
         // Start the clock

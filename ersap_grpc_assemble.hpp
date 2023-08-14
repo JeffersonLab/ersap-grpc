@@ -628,6 +628,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 }
                 else if (packetDataId != srcId) {
                     // different data source, reject this packet
+                    if (debug) fprintf(stderr, "getReassembledBuffer: reject packet from source id %hu\n", packetDataId);
                     continue;
                 }
 
@@ -635,8 +636,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 // Parse data
                 prevTotalPkts = totalPkts;
                 parsePacketData(pkt + HEADER_BYTES, &delay, &totalPkts, &pktSequence);
-                if (debug && takeStats) fprintf(stderr, "getReassembledBuffer: pkt data: delay = %u, total pkts = %u, seq = %u\n",
-                                               delay, totalPkts, pktSequence);
+                if (debug && takeStats) {
+                    fprintf(stderr, "getReassembledBuffer: delay = %u, pkts = %u, seq = %u, tick = %" PRIu64 ", srcid = %hu\n",
+                                               delay, totalPkts, pktSequence, packetTick, packetDataId);
+                }
 
 
                 // The following if-else is built on the idea that we start with a packet that has offset = 0.
