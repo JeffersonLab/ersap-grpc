@@ -91,7 +91,7 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -113,7 +113,8 @@ static void printHelp(char *programName) {
 
             "        [-b <internal buf size to hold event (150kB default)>]",
             "        [-fifo <fifo size (1000 default)>]",
-            "        [-s <PID fifo set point (0 default)>]");
+            "        [-s <PID fifo set point (0 default)>]",
+            "        [-fill <set reported fifo fill %, 0-1 (and pid error to 0) for testing>]\n");
 
     fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a control plane.\n");
     fprintf(stderr, "        The -p, -a, and -range args are only to tell CP where to send our data, but are otherwise unused.\n");
@@ -145,6 +146,7 @@ static void printHelp(char *programName) {
  * @param kp            filled with PID proportional constant.
  * @param ki            filled with PID integral constant.
  * @param kd            filled with PID differential constant.
+ * @param fill          filled with fixed value to report as fifo fill level (0-1).
  */
 static void parseArgs(int argc, char **argv,
                       float *setPt, uint16_t *cpPort,
@@ -153,7 +155,7 @@ static void parseArgs(int argc, char **argv,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       uint32_t *fillCount, uint32_t *reportTime,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
-                      float *kp, float *ki, float *kd) {
+                      float *kp, float *ki, float *kd, float *fill) {
 
     int c, i_tmp;
     bool help = false;
@@ -174,6 +176,7 @@ static void parseArgs(int argc, char **argv,
                           {"kd",       1, nullptr, 13},
                           {"count",    1, nullptr, 14},
                           {"rtime",    1, nullptr, 15},
+                          {"fill",     1, nullptr, 16},
                           {0,       0, 0,    0}
             };
 
@@ -397,6 +400,26 @@ static void parseArgs(int argc, char **argv,
                 }
                 break;
 
+            case 16:
+                // Fix the reported fifo fill level (0-1) to this value - for testing
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -fill\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp > 1.F || sp < 0.F) {
+                    fprintf(stderr, "Values to -fill must be >= 0. and <= 1.\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *fill = sp;
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -462,12 +485,13 @@ static void *fillFifoThread(void *arg) {
     FILE *fp         = tArg->fp;
 
     uint32_t tickPrescale = 1;
+    // TODO: the tick is the problem!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     uint64_t tick;
     uint16_t dataId;
     ssize_t  nBytes;
 
     clearStats(stats);
-
+    uint32_t drPkts = 0, prevDrPkts = 0;
 
     while (true) {
         // Create vector
@@ -475,6 +499,11 @@ static void *fillFifoThread(void *arg) {
         // We create vector capacity here, necessary if we're going to use backing array
         // instead of using "push_back()", which we do in the getReassembledBuffer routine.
         vec.reserve(bufSize);
+
+        // We do NOT know what the expected tick value is to be received since the LB can mix it up.
+        // The following value keeps getReassembledBuffer from calculating dropped events & pkts
+        // based on the expected tick value.
+        tick = 0xffffffffffffffffL;
 
         // Fill vector with data. Insert data about packet order.
         nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
@@ -486,13 +515,21 @@ static void *fillFifoThread(void *arg) {
 
         // Receiving stats
 
-        totalBytes   += nBytes;
-        totalPackets += stats->acceptedPackets;
+        totalBytes += nBytes;
+        // stats keeps a running total in which getReassembledBuffer adds to it with each call since
+        // stats is never cleared between calls
+        totalPackets = stats->acceptedPackets;
         totalEvents++;
 
         // atomic
-        droppedEvents  += stats->droppedBuffers;
-        droppedPackets += stats->droppedPackets;
+        droppedEvents  = stats->discardedBuffers;
+        droppedPackets = stats->discardedPackets;
+
+        drPkts += stats->droppedPackets;
+        if (drPkts > prevDrPkts) {
+            printf("dropped = %u, tp = %" PRIu64 "\n", drPkts, totalPackets);
+            prevDrPkts = drPkts;
+        }
 
         // Move this vector into the queue
         sharedQ->push(std::move(vec));
@@ -609,19 +646,32 @@ static void *rateThread(void *arg) {
             continue;
         }
 
+
+
+
+// TODO: This is WRONG, droppedPackets is cumulative !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         // Dropped stuff rates
         droppedPkts = droppedPackets;
-        droppedPackets.store(0);
+        //droppedPackets.store(0);
+        droppedPackets = 0;
         totalDroppedPkts += droppedPkts;
 
         droppedEvts = droppedEvents;
-        droppedEvents.store(0);
+        //droppedEvents.store(0);
+        droppedEvents = 0;
         totalDroppedEvts += droppedEvts;
+
+
+
+
 
         pktRate = 1000000.0 * ((double) packetCount) / time;
         pktAvgRate = 1000000.0 * ((double) currTotalPackets) / totalT;
-        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec\n",
-                pktRate, pktAvgRate, time, absTime);
+//        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec\n",
+//                pktRate, pktAvgRate, time, absTime);
+
+        printf("Packets:       %3.4g Hz,    %3.4g Avg, total %" PRIu64 "\n",
+                pktRate, pktAvgRate, currTotalPackets);
 
         // Data rates (with NO header info)
         dataRate = ((double) byteCount) / time;
@@ -652,6 +702,7 @@ int main(int argc, char **argv) {
     ssize_t nBytes;
     uint32_t bufSize = 150000; // 150kB default
 
+    float setFill  = -1.0F;
     float pidError = 0.F;
     float setPoint = 0.F;   // set fifo to 1/2 full by default
 
@@ -659,6 +710,7 @@ int main(int argc, char **argv) {
     bool debug = false;
     bool useIPv6 = false;
     bool writeToFile = false;
+    bool fixedFill = false;
 
     int range;
     uint16_t port = 17750;
@@ -695,7 +747,7 @@ int main(int argc, char **argv) {
     parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName,
               &bufSize, &fifoCapacity, &fcount, &reportTime,
-              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd);
+              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -703,6 +755,12 @@ int main(int argc, char **argv) {
         time_t localT = time(nullptr) & 0xffff;
         std::string name = "backend" + std::to_string(localT);
         std::strcpy(clientName, name.c_str());
+    }
+
+    // Don't compare floats directly
+    if (setFill >= -0.1F) {
+        fprintf(stderr, "sending CP fixed fifo fill = %f, pid error = 0\n", setFill);
+        fixedFill = true;
     }
 
     // convert integer range in PortRange enum-
@@ -981,7 +1039,13 @@ int main(int argc, char **argv) {
         // Every "loopMax" loops
         if (--loopCount <= 0) {
             // Update the changing variables
-            client.update(fillPercent, pidError);
+            if (fixedFill) {
+                // test CP by fixing fill level and setting pid error to 0
+                client.update(setFill, 0);
+            }
+            else {
+                client.update(fillPercent, pidError);
+            }
 
             // Send to server
             err = client.SendState();

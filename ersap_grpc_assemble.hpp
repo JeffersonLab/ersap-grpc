@@ -248,25 +248,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
          * @param stats shared pointer to structure to be cleared.
          */
         static void clearStats(std::shared_ptr<packetRecvStats> stats) {
-            stats->endTime = 0;
-            stats->startTime = 0;
-            stats->readTime = 0;
-
-            stats->droppedPackets = 0;
-            stats->acceptedPackets = 0;
-            stats->discardedPackets = 0;
-
-            stats->droppedBytes = 0;
-            stats->acceptedBytes = 0;
-            stats->discardedBytes = 0;
-
-            stats->droppedBuffers = 0;
-            stats->discardedBuffers = 0;
-            stats->builtBuffers = 0;
-
-            stats->cpuPkt = -1;
-            stats->cpuBuf = -1;
-            stats->cpuBuf = -1;
+            clearStats(stats.get());
         }
 
 
@@ -595,13 +577,13 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             size_t bufLen = vec.capacity();
             char* dataBuf = vec.data();
 
-            uint32_t offset, length, pktCount;
-            uint32_t delay, totalPkts, pktSequence;
+            uint32_t offset, length = 0, prevLength, pktCount, pktSequence;
+            uint32_t delay, totalPkts = 0, prevTotalPkts;
 
             bool dumpTick = false;
             bool veryFirstRead = true;
 
-            int  version;
+            int  version, mtu;
             uint16_t packetDataId, srcId;
             ssize_t dataBytes, bytesRead, totalBytesRead = 0;
 
@@ -638,6 +620,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
 
                 // Parse RE header
+                prevLength = length;
                 parseReHeader(pkt, &version, &packetDataId, &offset, &length, &packetTick);
                 if (veryFirstRead) {
                     // record data id of first packet of buffer
@@ -650,6 +633,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
 
                 // Parse data
+                prevTotalPkts = totalPkts;
                 parsePacketData(pkt + HEADER_BYTES, &delay, &totalPkts, &pktSequence);
                 if (debug && takeStats) fprintf(stderr, "getReassembledBuffer: pkt data: delay = %u, total pkts = %u, seq = %u\n",
                                                delay, totalPkts, pktSequence);
@@ -660,10 +644,25 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 // experience has shown that this almost never happens. Thus, for efficiency's sake,
                 // we automatically dump any tick whose first packet does not show up FIRST.
 
+                // Probably, where this most often gets us into trouble is if the first packet of the next
+                // tick/event shows up just before the last pkt of the previous tick. In that case, this logic
+                // just dumps all the previous info even if last pkt comes a little late.
+
+                // Worst case scenario is if the pkts of 2 events are interleaved.
+                // Then the number of dumped packets, bytes, and events will be grossly over-counted.
+
                 // To do a complete job of trying to track out-of-order packets, we would need to
                 // simultaneously keep track of packets from multiple ticks. This small routine
                 // would need to keep state - greatly complicating things. So skip that here.
                 // Such work is done in the packetBlasteeFull.cc program.
+
+                // In general, tracking dropped pkts/events/data will always be guess work unless
+                // we know exactly what we're supposed to be receiving.
+                // Thus, normally we cannot know how many complete events were dropped.
+                // When deciding to drop an event due to incomplete packets, we attempt to
+                // get a guess on the # of packets.
+                // In this simulation, however, the # of packets are sent as part of the data!
+
 
                 // If we get packet from new tick ...
                 if (packetTick != prevTick) {
@@ -683,9 +682,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                         dumpTick = true;
                         prevTick = packetTick;
 
-                        // stats
-                        discardedPackets++;
-                        discardedBytes += dataBytes;
+                        // Stats. Guess at # of packets, rounding up
+                        //discardedPackets += (length + (dataBytes - 1))/dataBytes;
+                        discardedPackets += totalPkts;
+                        discardedBytes += length;
                         discardedBufs++;
 
                         continue;
@@ -699,6 +699,11 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                         pktCount = 0;
                         totalBytesRead = 0;
                         srcId = packetDataId;
+
+                        // We discard previous tick/event
+                        discardedPackets += prevTotalPkts;
+                        discardedBytes += prevLength;
+                        discardedBufs++;
                     }
 
                     // If here, new tick/event/buffer, offset = 0.
@@ -712,8 +717,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                     veryFirstRead = true;
 
                     // stats
-                    discardedPackets++;
-                    discardedBytes += dataBytes;
+                 //   discardedPackets++;
+                 //   discardedBytes += dataBytes;
 
                     if (debug) fprintf(stderr, "Dump pkt from id %hu, %" PRIu64 " - %u, expected seq 0\n",
                             packetDataId, packetTick, offset);
@@ -747,6 +752,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 prevTick = packetTick;
                 pktCount++;
 
+//fprintf(stderr, "          %u\n", pktCount);
 
                 // If we've reassembled all packets ...
                 if (pktCount >= totalPkts) {
@@ -775,6 +781,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
                         stats->acceptedBytes    += totalBytesRead;
                         stats->acceptedPackets  += pktCount;
+//fprintf(stderr, "             %" PRId64 "\n", stats->acceptedPackets);
 
                         stats->discardedBytes   += discardedBytes;
                         stats->discardedPackets += discardedPackets;
