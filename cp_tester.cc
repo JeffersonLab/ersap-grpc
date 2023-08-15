@@ -274,7 +274,7 @@ static void parseArgs(int argc, char **argv,
                 }
                 break;
 
-            case 3:
+            case 7:
                 // Cores to run on
                 if (strlen(optarg) < 1) {
                     fprintf(stderr, "Invalid argument to -cores, need comma-separated list of core ids\n\n");
@@ -313,6 +313,20 @@ static void parseArgs(int argc, char **argv,
                             break;
                         }
                     }
+
+                    if (oneMore) {
+                        errno = 0;
+                        cores[index] = (int) strtol(s.c_str(), nullptr, 0);
+                        if (errno == EINVAL || errno == ERANGE) {
+                            fprintf(stderr, "Invalid argument to -cores, need comma-separated list of core ids\n\n");
+                            printHelp(argv[0]);
+                            exit(-1);
+                        }
+                        index++;
+                        //std::cout << s << std::endl;
+                    }
+                }
+                break;
 
             case 's':
                 // PID set point for fifo fill
