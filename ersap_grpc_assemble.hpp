@@ -583,7 +583,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             bool dumpTick = false;
             bool veryFirstRead = true;
 
-            int  version, mtu;
+            int  version;
             uint16_t packetDataId, srcId;
             ssize_t dataBytes, bytesRead, totalBytesRead = 0;
 
@@ -719,12 +719,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                     // If here, we missed beginning pkt(s) for this buf so we're dumping whole tick
                     veryFirstRead = true;
 
-                    // stats
-                 //   discardedPackets++;
-                 //   discardedBytes += dataBytes;
-
-                    if (debug) fprintf(stderr, "Dump pkt from id %hu, %" PRIu64 " - %u, expected seq 0\n",
-                            packetDataId, packetTick, offset);
+                    if (debug) fprintf(stderr, "Dump pkt from id %hu, tick %" PRIu64 "\n",
+                                       packetDataId, packetTick);
                     continue;
                 }
 
@@ -765,12 +761,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
 
                     // Keep some stats
                     if (takeStats) {
-                        int64_t diff = 0;
-                        int64_t droppedTicks = 0UL;
                         if (knowExpectedTick) {
-                            diff = packetTick - expectedTick;
+                            int64_t diff = packetTick - expectedTick;
                             diff = (diff < 0) ? -diff : diff;
-                            droppedTicks = diff / tickPrescale;
+                            int64_t droppedTicks = diff / tickPrescale;
 
                             // In this case, it includes the discarded bufs (which it should not)
                             stats->droppedBuffers   += droppedTicks; // estimate
