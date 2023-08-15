@@ -89,7 +89,7 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -110,6 +110,7 @@ static void printHelp(char *programName) {
             "        [-rtime <millisec for reporting fill to CP, default 1 sec>]\n",
 
             "        [-b <internal buf size to hold event (150kB default)>]",
+            "        [-cores <comma-separated list of cores to run on>]",
             "        [-fifo <fifo size (1000 default)>]",
             "        [-s <PID fifo set point (0 default)>]",
             "        [-fill <set reported fifo fill %, 0-1 (and pid error to 0) for testing>]\n");
@@ -126,6 +127,7 @@ static void printHelp(char *programName) {
  *
  * @param argc          arg count from main().
  * @param argv          arg list from main().
+ * @param cores         array of core ids on which to run assembly thread.
  * @param setPt         filled with the set point of PID loop used with fifo fill level.
  * @param cpPort        filled with grpc server (control plane) port to info to.
  * @param port          filled with UDP receiving data port to listen on.
@@ -147,7 +149,7 @@ static void printHelp(char *programName) {
  * @param fill          filled with fixed value to report as fifo fill level (0-1).
  */
 static void parseArgs(int argc, char **argv,
-                      float *setPt, uint16_t *cpPort,
+                      int *cores, float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range,
                       char *listenAddr, char *token, char *fileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
@@ -166,6 +168,7 @@ static void parseArgs(int argc, char **argv,
                           {"cp_addr",  1, nullptr, 4},
                           {"cp_port",  1, nullptr, 5},
                           {"name",     1, nullptr, 6},
+                          {"cores",    1, nullptr, 7},
                           {"range",    1, nullptr, 8},
                           {"token",    1, nullptr, 9},
                           {"file",     1, nullptr, 10},
@@ -270,6 +273,46 @@ static void parseArgs(int argc, char **argv,
                     exit(-1);
                 }
                 break;
+
+            case 3:
+                // Cores to run on
+                if (strlen(optarg) < 1) {
+                    fprintf(stderr, "Invalid argument to -cores, need comma-separated list of core ids\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                {
+                    // split into ints
+                    std::string s = optarg;
+                    std::string delimiter = ",";
+
+                    size_t pos = 0;
+                    std::string token;
+                    char *endptr;
+                    int index = 0;
+                    bool oneMore = true;
+
+                    while ((pos = s.find(delimiter)) != std::string::npos) {
+                        //fprintf(stderr, "pos = %llu\n", pos);
+                        token = s.substr(0, pos);
+                        errno = 0;
+                        cores[index] = (int) strtol(token.c_str(), &endptr, 0);
+
+                        if ((token.c_str() - endptr) == 0) {
+                            //fprintf(stderr, "two commas next to eachother\n");
+                            oneMore = false;
+                            break;
+                        }
+                        index++;
+                        //std::cout << token << std::endl;
+                        s.erase(0, pos + delimiter.length());
+                        if (s.length() == 0) {
+                            //fprintf(stderr, "break on zero len string\n");
+                            oneMore = false;
+                            break;
+                        }
+                    }
 
             case 's':
                 // PID set point for fifo fill
@@ -456,6 +499,7 @@ typedef struct threadArg_t {
     std::shared_ptr<ejfat::packetRecvStats> stats;
     std::shared_ptr<ejfat::queue<std::vector<char>>> sharedQ;
     int  udpSocket;
+    int  *cores; // array of cores to run on
     uint32_t bufSize;
     bool debug;
     bool writeToFile;
@@ -480,6 +524,7 @@ static void *fillFifoThread(void *arg) {
     int32_t bufSize  = tArg->bufSize;
     bool writeToFile = tArg->debug;
     bool debug       = tArg->debug;
+    int *cores       = tArg->cores;
     FILE *fp         = tArg->fp;
 
     uint32_t tickPrescale = 1;
@@ -489,6 +534,37 @@ static void *fillFifoThread(void *arg) {
 
     clearStats(stats);
     uint32_t drPkts = 0, prevDrPkts = 0;
+
+#ifdef __linux__
+
+    if (cores[0] > -1) {
+        // Create a cpu_set_t object representing a set of CPUs. Clear it and mark given CPUs as set.
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+
+        if (debug) {
+            for (int i=0; i < 10; i++) {
+                     std::cerr << "core[" << i << "] = " << cores[i] << "\n";
+            }
+        }
+
+        for (int i=0; i < 10; i++) {
+            if (cores[i] >= 0) {
+                std::cerr << "Run reassembly thread on core " << cores[i] << "\n";
+                CPU_SET(cores[i], &cpuset);
+            }
+            else {
+                break;
+            }
+        }
+        pthread_t current_thread = pthread_self();
+        int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+        if (rc != 0) {
+            std::cerr << "Error calling pthread_setaffinity_np: " << rc << std::endl;
+        }
+    }
+
+#endif
 
     while (true) {
         // Create vector
@@ -699,6 +775,7 @@ int main(int argc, char **argv) {
 
     ssize_t nBytes;
     uint32_t bufSize = 150000; // 150kB default
+    int cores[10];
 
     float setFill  = -1.0F;
     float pidError = 0.F;
@@ -742,7 +819,11 @@ int main(int argc, char **argv) {
     memset(authToken, 0, 256);
     strcpy(authToken, "udplbd_default_change_me");
 
-    parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
+    for (int i=0; i < 10; i++) {
+        cores[i] = -1;
+    }
+
+    parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName,
               &bufSize, &fifoCapacity, &fcount, &reportTime,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill);
@@ -907,6 +988,7 @@ int main(int argc, char **argv) {
     targ->udpSocket = udpSocket;
     targ->writeToFile = writeToFile;
     targ->debug = debug;
+    targ->cores = cores;
     targ->fp = fp;
 
     pthread_t thdFill;
