@@ -673,13 +673,13 @@ static void *drainFifoThread(void *arg) {
 // Thread to send to print out rates
 static void *rateThread(void *arg) {
 
-    uint64_t packetCount, byteCount, eventCount;
-    uint64_t prevTotalPackets, prevTotalBytes, prevTotalEvents;
-    uint64_t currTotalPackets, currTotalBytes, currTotalEvents;
+    int64_t packetCount, byteCount, eventCount;
+    int64_t prevTotalPackets, prevTotalBytes, prevTotalEvents;
+    int64_t currTotalPackets, currTotalBytes, currTotalEvents;
 
-    uint64_t dropPacketCount, dropByteCount, dropEventCount;
-    uint64_t currDropTotalPackets, currDropTotalBytes, currDropTotalEvents;
-    uint64_t prevDropTotalPackets, prevDropTotalBytes, prevDropTotalEvents;
+    int64_t dropPacketCount, dropByteCount, dropEventCount;
+    int64_t currDropTotalPackets, currDropTotalBytes, currDropTotalEvents;
+    int64_t prevDropTotalPackets, prevDropTotalBytes, prevDropTotalEvents;
 
     // Ignore first rate calculation as it's most likely a bad value
     bool skipFirst = true;
@@ -698,7 +698,7 @@ static void *rateThread(void *arg) {
         prevTotalPackets = totalPackets;
         prevTotalEvents  = totalEvents;
 
-        prevDropTotalBytes   = droppedEvents;
+        prevDropTotalBytes   = droppedBytes;
         prevDropTotalPackets = droppedPackets;
         prevDropTotalEvents  = droppedEvents;
 
@@ -717,7 +717,7 @@ static void *rateThread(void *arg) {
         currTotalPackets = totalPackets;
         currTotalEvents  = totalEvents;
 
-        currDropTotalBytes   = droppedEvents;
+        currDropTotalBytes   = droppedBytes;
         currDropTotalPackets = droppedPackets;
         currDropTotalEvents  = droppedEvents;
 
