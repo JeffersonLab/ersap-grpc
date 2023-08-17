@@ -262,7 +262,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             if (!prefix.empty()) {
                 fprintf(stderr, "%s: ", prefix.c_str());
             }
-            fprintf(stderr,  "bytes = %" PRId64 ", pkts = %" PRId64 ", dropped bytes = %" PRId64 ", dropped pkts = %" PRId64 ", dropped ticks = %" PRI464 "\n",
+            fprintf(stderr,  "bytes = %" PRId64 ", pkts = %" PRId64 ", dropped bytes = %" PRId64 ", dropped pkts = %" PRId64 ", dropped ticks = %" PRId64 "\n",
                     stats->acceptedBytes, stats->acceptedPackets, stats->droppedBytes,
                     stats->droppedPackets, stats->droppedBuffers);
         }
