@@ -499,11 +499,8 @@ static void parseArgs(int argc, char **argv,
 
 
 // Statistics
-static volatile uint64_t totalBytes=0, totalPackets=0, totalEvents=0;
-//static std::atomic<uint32_t> droppedPackets {0};
-//static std::atomic<uint32_t> droppedEvents {0};
-//static std::atomic<uint32_t> droppedBytes {0};
-static uint32_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
+static volatile int64_t totalBytes=0, totalPackets=0, totalEvents=0;
+static volatile int64_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 
 
 
@@ -688,8 +685,7 @@ static void *rateThread(void *arg) {
     bool skipFirst = true;
 
     double pktRate, pktAvgRate, dataRate, dataAvgRate, totalRate, totalAvgRate, evRate, avgEvRate;
-    int64_t totalT = 0, time, droppedPkts, totalDroppedPkts = 0, droppedEvts, totalDroppedEvts = 0;
-    uint64_t absTime;
+    int64_t totalT = 0, time, absTime;
     struct timespec t1, t2, firstT;
 
     // Get the current time
@@ -755,11 +751,11 @@ static void *rateThread(void *arg) {
 
         pktRate = 1000000.0 * ((double) packetCount) / time;
         pktAvgRate = 1000000.0 * ((double) currTotalPackets) / totalT;
-//        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRIu64 " epoch msec\n",
-//                pktRate, pktAvgRate, time, absTime);
+        printf("Packets:       %3.4g Hz,    %3.4g Avg, time: diff = %" PRId64 " usec, abs = %" PRId64 " epoch msec\n",
+                pktRate, pktAvgRate, time, absTime);
 
-        printf("Packets:       %3.4g Hz,    %3.4g Avg, total %" PRIu64 "\n",
-                pktRate, pktAvgRate, currTotalPackets);
+//        printf("Packets:       %3.4g Hz,    %3.4g Avg, total %" PRIu64 "\n",
+//                pktRate, pktAvgRate, currTotalPackets);
 
         // Data rates (with NO header info)
         dataRate = ((double) byteCount) / time;
@@ -775,7 +771,7 @@ static void *rateThread(void *arg) {
         printf("Events:        %3.4g Hz,  %3.4g Avg, total %" PRIu64 "\n", evRate, avgEvRate, totalEvents);
 
         // Drop info
-        printf("Dropped: evts: %" PRIu64 ", %" PRIu64 " total, pkts: %" PRIu64 ", %" PRIu64 " total\n\n",
+        printf("Dropped: evts: %" PRId64 ", %" PRId64 " total, pkts: %" PRId64 ", %" PRId64 " total\n\n",
                 dropEventCount, currDropTotalEvents, dropPacketCount, currDropTotalPackets);
 
         t1 = t2;
@@ -1154,8 +1150,8 @@ int main(int argc, char **argv) {
         // Print out every 4 seconds
         if (absTime - prevAbsTime >= 4000) {
             prevAbsTime = absTime;
-            fprintf(fp, "     Fifo %d%% filled, %d avg level, pid err %f\n",
-                    (int) (fillPercent * 100), (int) fillAvg, pidError);
+            fprintf(fp, "     Fifo level %d  Avg:  %.2f,  %.2f%%,  pid err %f\n\n",
+                   ((int)curFill), fillAvg, (100.F*fillPercent), pidError);
             fflush(fp);
         }
     }

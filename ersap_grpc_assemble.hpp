@@ -208,10 +208,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             volatile int64_t acceptedBytes;    /**< Number of bytes successfully read, NOT including RE header. */
             volatile int64_t discardedBytes;   /**< Number of bytes dropped. */
 
-            volatile int32_t droppedBuffers;    /**< Number of ticks/buffers for which no packets showed up.
+            volatile int64_t droppedBuffers;    /**< Number of ticks/buffers for which no packets showed up.
                                                       Don't think it's possible to measure this in general. */
-            volatile int32_t discardedBuffers;  /**< Number of ticks/buffers discarded. */
-            volatile int32_t builtBuffers;      /**< Number of ticks/buffers fully reassembled. */
+            volatile int64_t discardedBuffers;  /**< Number of ticks/buffers discarded. */
+            volatile int64_t builtBuffers;      /**< Number of ticks/buffers fully reassembled. */
 
             volatile int cpuPkt;               /**< CPU that thread to read pkts is running on. */
             volatile int cpuBuf;               /**< CPU that thread to read build buffers is running on. */
@@ -262,7 +262,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             if (!prefix.empty()) {
                 fprintf(stderr, "%s: ", prefix.c_str());
             }
-            fprintf(stderr,  "bytes = %" PRIu64 ", pkts = %" PRIu64 ", dropped bytes = %" PRIu64 ", dropped pkts = %" PRIu64 ", dropped ticks = %u\n",
+            fprintf(stderr,  "bytes = %" PRId64 ", pkts = %" PRId64 ", dropped bytes = %" PRId64 ", dropped pkts = %" PRId64 ", dropped ticks = %" PRI464 "\n",
                     stats->acceptedBytes, stats->acceptedPackets, stats->droppedBytes,
                     stats->droppedPackets, stats->droppedBuffers);
         }
@@ -686,7 +686,6 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                         prevTick = packetTick;
 
                         // Stats. Guess at # of packets, rounding up
-                        //discardedPackets += (length + (dataBytes - 1))/dataBytes;
                         discardedPackets += totalPkts;
                         discardedBytes += length;
                         discardedBufs++;
