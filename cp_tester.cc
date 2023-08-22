@@ -84,6 +84,10 @@ static uint32_t fifoLevel;
 static std::mutex fifoMutex;
 static std::condition_variable fifoCV;
 
+// Keep track of counters
+static uint64_t eventsReassembled = 0;
+static uint64_t eventsProcessed = 0;
+
 
 /**
  * Print out help.
@@ -91,7 +95,7 @@ static std::condition_variable fifoCV;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -106,7 +110,11 @@ static void printHelp(char *programName) {
 
             "        [-b <internal buf size to hold event (150kB default)>]",
             "        [-fifo <fifo size (1000 default)>]",
-            "        [-s <PID fifo set point (0 default)>]");
+            "        [-s <PID fifo set point (0 default)>]",
+            "        [-Kp <proportional gain (0.5 default)>]",
+            "        [-Ki <integral gain (0. default)>]",
+            "        [-Kd <derivative gain (0. default)>]",
+            "        [-csv <path (stdout default)>]");
 
     fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a control plane.\n");
     fprintf(stderr, "        The -p, -a, and -range args are only to tell CP where to send our data, but are otherwise unused.\n");
@@ -137,7 +145,8 @@ static void printHelp(char *programName) {
 static void parseArgs(int argc, char **argv,
                       float *setPt, uint16_t *cpPort,
                       uint16_t *port, int *range,
-                      char *listenAddr, char *token, char *fileName,
+                      char *listenAddr, char *token,
+                      char *fileName, char *csvFileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
                       float *kp, float *ki, float *kd) {
@@ -159,6 +168,7 @@ static void parseArgs(int argc, char **argv,
                           {"kp",       1, nullptr, 11},
                           {"ki",       1, nullptr, 12},
                           {"kd",       1, nullptr, 13},
+                          {"csv",       1, nullptr, 14},
                           {0,       0, 0,    0}
             };
 
@@ -318,7 +328,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 11:
-                // Set the Kp PID loop parameter
+                // Set the proportional gain Kp for the PID loop
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -331,7 +341,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 12:
-                // Set the Ki PID loop parameter
+                 // Set the integral gain Ki for the PID loop
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -344,7 +354,7 @@ static void parseArgs(int argc, char **argv,
                 break;
 
             case 13:
-                // Set the Kd PID loop parameter
+                 // Set the derivative gain Kd for the PID loop
                 try {
                     sp = (float) std::stof(optarg, nullptr);
                 }
@@ -354,6 +364,16 @@ static void parseArgs(int argc, char **argv,
                     exit(-1);
                 }
                 *kd = sp;
+                break;
+
+            case 14:
+                // Set the CSV output path
+                if (strlen(optarg) > 128 || strlen(optarg) < 1) {
+                    fprintf(stderr, "filename too long/short, %s\n\n", optarg);
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                strcpy(csvFileName, optarg);
                 break;
 
             case 'v':
@@ -436,6 +456,7 @@ static void *fillFifoThread(void *arg) {
         }
 
         // Move this vector into the queue
+        eventsReassembled++;
         sharedQ->push(std::move(vec));
     }
 
@@ -484,6 +505,7 @@ static void *drainFifoThread(void *arg) {
 
         // Delay to simulate data processing
         std::this_thread::sleep_for(std::chrono::microseconds(delay));
+        eventsProcessed++;
     }
 
     return nullptr;
@@ -527,11 +549,14 @@ int main(int argc, char **argv) {
     char fileName[128];
     memset(fileName, 0, 128);
 
+    char csvFileName[128];
+    memset(fileName, 0, 128);
+
     char authToken[256];
     memset(authToken, 0, 256);
 
-    parseArgs(argc, argv, &setPoint, &cpPort, &port, &range,
-              listeningAddr, authToken, fileName, &bufSize, &fifoCapacity,
+    parseArgs(argc, argv, &setPoint, &cpPort, &port, &range, listeningAddr,
+              authToken, fileName, csvFileName, &bufSize, &fifoCapacity,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd);
 
     // give it a default name
@@ -551,6 +576,7 @@ int main(int argc, char **argv) {
 
     // By default output goes to stderr
     FILE *fp = stderr;
+    FILE *csvFp = stdout;
 
     // else send to file
     if (strlen(fileName) > 0) {
@@ -740,6 +766,7 @@ int main(int argc, char **argv) {
     bool startingUp = true;
     int fillIndex = 0, firstLoopCounter = 1;
 
+    fprintf(csvFp, "timestamp,fifo_mean_fill_pct,fifo_mean_fill,pid_control_variable,events_reassembled,events_processed\n");
 
     while (true) {
 
@@ -751,11 +778,12 @@ int main(int argc, char **argv) {
         // Previous value at this index
         prevFill = fillValues[fillIndex];
         // Store current val at this index
-        fillValues[fillIndex++] = curFill;
+        fillValues[fillIndex] = curFill;
         // Add current val and remove previous val at this index from the running total.
         // That way we have added loopMax number of most recent entries at ony one time.
         runningFillTotal += curFill - prevFill;
         // Find index for the next round
+        fillIndex++;
         fillIndex = (fillIndex == loopMax) ? 0 : fillIndex;
 
         if (startingUp) {
@@ -791,7 +819,21 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            fprintf(fp, "Fifo %d%% filled, %d avg level, pid err %f\n", (int)(fillPercent*100), (int)fillAvg, pidError);
+            auto now = std::chrono::system_clock::now();
+            std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+            char timestamp[20];
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now_c));
+            fprintf(
+                csvFp,
+                "%s,%f,%f,%f,%d,%d\n",
+                timestamp,
+                fillPercent,
+                fillAvg,
+                pidError,
+                eventsProcessed,
+                eventsReassembled
+            );
+            fflush(csvFp);
             fflush(fp);
 
             loopCount = loopMax;
