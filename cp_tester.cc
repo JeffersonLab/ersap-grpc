@@ -501,6 +501,7 @@ static void parseArgs(int argc, char **argv,
 // Statistics
 static volatile int64_t totalBytes=0, totalPackets=0, totalEvents=0;
 static volatile int64_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
+static volatile int64_t discardedBuiltPkts=0, discardedBuiltEvts=0, discardedBuiltBytes=0;
 
 
 
@@ -544,7 +545,7 @@ static void *fillFifoThread(void *arg) {
     ssize_t  nBytes;
 
     clearStats(stats);
-    uint32_t drPkts = 0, prevDrPkts = 0;
+    int64_t prevTotalPackets;
 
 #ifdef __linux__
 
@@ -589,6 +590,9 @@ static void *fillFifoThread(void *arg) {
         // based on the expected tick value.
         tick = 0xffffffffffffffffL;
 
+        // Store values before reassembly in case we need to dump buffer if fifo full
+        prevTotalPackets = totalPackets;
+
         // Fill vector with data. Insert data about packet order.
         nBytes = getReassembledBuffer(vec, udpSocket, debug, &tick, &dataId, stats, tickPrescale);
         if (nBytes < 0) {
@@ -597,28 +601,30 @@ static void *fillFifoThread(void *arg) {
             exit(1);
         }
 
-        // Receiving stats
+        // Receiving Stats
 
-        totalBytes += nBytes;
-        // stats keeps a running total in which getReassembledBuffer adds to it with each call since
-        // stats is never cleared between calls
+        // stats keeps a running total in which getReassembledBuffer adds to it with each call
+        totalBytes  += nBytes;
         totalPackets = stats->acceptedPackets;
         totalEvents++;
 
-        // atomic
         droppedBytes   = stats->discardedBytes;
         droppedEvents  = stats->discardedBuffers;
         droppedPackets = stats->discardedPackets;
 
-        drPkts = stats->droppedPackets;
-        if (drPkts > prevDrPkts) {
-            printf("dropped = %u, tp = %" PRIu64 "\n", drPkts, totalPackets);
-            prevDrPkts = drPkts;
-        }
+        // Move this vector into the queue, but don't block.
+        if (!sharedQ->try_push(std::move(vec))) {
+            // If the Q full, dump event and move on,
+            // which is what happens with Vardan's backend and the ET system.
+            // So hopefully this is a decent model of the backend.
 
-        // Move this vector into the queue
-        sharedQ->push(std::move(vec));
+            // Track what is specifically dumped due to full Q
+            discardedBuiltEvts++;
+            discardedBuiltPkts   += stats->acceptedPackets - prevTotalPackets;
+            discardedBuiltBytes += nBytes;
+        }
     }
+
 
     return nullptr;
 }
@@ -681,6 +687,10 @@ static void *rateThread(void *arg) {
     int64_t currDropTotalPackets, currDropTotalBytes, currDropTotalEvents;
     int64_t prevDropTotalPackets, prevDropTotalBytes, prevDropTotalEvents;
 
+    int64_t builtDisPacketCount, builtDisByteCount, builtDisEventCount;
+    int64_t currBuiltDisTotPkts, currBuiltDisTotBytes, currBuiltDisTotEvts;
+    int64_t prevBuiltDisTotPkts, prevBuiltDisTotBytes, prevBuiltDisTotEvts;
+
     // Ignore first rate calculation as it's most likely a bad value
     bool skipFirst = true;
 
@@ -702,6 +712,10 @@ static void *rateThread(void *arg) {
         prevDropTotalPackets = droppedPackets;
         prevDropTotalEvents  = droppedEvents;
 
+        prevBuiltDisTotBytes = discardedBuiltBytes;
+        prevBuiltDisTotPkts  = discardedBuiltPkts;
+        prevBuiltDisTotEvts  = discardedBuiltEvts;
+
         // Delay 4 seconds between printouts
         std::this_thread::sleep_for(std::chrono::seconds(4));
 
@@ -720,6 +734,10 @@ static void *rateThread(void *arg) {
         currDropTotalBytes   = droppedBytes;
         currDropTotalPackets = droppedPackets;
         currDropTotalEvents  = droppedEvents;
+
+        currBuiltDisTotBytes = discardedBuiltBytes;
+        currBuiltDisTotPkts  = discardedBuiltPkts;
+        currBuiltDisTotEvts  = discardedBuiltEvts;
 
         if (skipFirst) {
             // Don't calculate rates until data is coming in
@@ -740,6 +758,10 @@ static void *rateThread(void *arg) {
         dropByteCount   = currDropTotalBytes   - prevDropTotalBytes;
         dropPacketCount = currDropTotalPackets - prevDropTotalPackets;
         dropEventCount  = currDropTotalEvents  - prevDropTotalEvents;
+
+        builtDisByteCount   = currBuiltDisTotBytes - prevBuiltDisTotBytes;
+        builtDisPacketCount = currBuiltDisTotPkts  - prevBuiltDisTotPkts;
+        builtDisEventCount  = currBuiltDisTotEvts  - prevBuiltDisTotEvts;
 
         // Reset things if #s rolling over
         if ( (byteCount < 0) || (totalT < 0) )  {
@@ -771,8 +793,11 @@ static void *rateThread(void *arg) {
         printf("Events:        %3.4g Hz,  %3.4g Avg, total %" PRIu64 "\n", evRate, avgEvRate, totalEvents);
 
         // Drop info
-        printf("Dropped: evts: %" PRId64 ", %" PRId64 " total, pkts: %" PRId64 ", %" PRId64 " total\n\n",
+        printf("Dropped:       %" PRId64 ", (%" PRId64 " total) evts,   pkts: %" PRId64 ", %" PRId64 " total\n",
                 dropEventCount, currDropTotalEvents, dropPacketCount, currDropTotalPackets);
+
+        printf("FullQ Discard: %" PRId64 ", (%" PRId64 " total) evts,   pkts: %" PRId64 ", %" PRId64 " total\n\n",
+                builtDisEventCount, currBuiltDisTotEvts, builtDisPacketCount, currBuiltDisTotPkts);
 
         t1 = t2;
     }

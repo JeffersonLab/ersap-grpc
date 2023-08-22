@@ -213,6 +213,11 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             volatile int64_t discardedBuffers;  /**< Number of ticks/buffers discarded. */
             volatile int64_t builtBuffers;      /**< Number of ticks/buffers fully reassembled. */
 
+//            volatile int64_t discardedBuiltBufs;  /**< Number of fully reassembled buffers discarded due to full Q. */
+//            volatile int64_t discardedBuiltPkts;  /**< Number of packets in fully reassembled buffers discarded due to full Q. */
+//            volatile int64_t discardedBuiltBytes; /**< Number of bytes in fully reassembled buffers discarded due to full Q. */
+
+
             volatile int cpuPkt;               /**< CPU that thread to read pkts is running on. */
             volatile int cpuBuf;               /**< CPU that thread to read build buffers is running on. */
         } packetRecvStats;
@@ -238,6 +243,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
             stats->droppedBuffers = 0;
             stats->discardedBuffers = 0;
             stats->builtBuffers = 0;
+
+//            stats->discardedBuiltBufs  = 0;
+//            stats->discardedBuiltPkts  = 0;
+//            stats->discardedBuiltBytes = 0;
 
             stats->cpuPkt = -1;
             stats->cpuBuf = -1;
