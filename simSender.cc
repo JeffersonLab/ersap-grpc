@@ -742,6 +742,10 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Create a variable backend processing time (exponential distribution around the given backend time)
     uint32_t backendTime = beDelayTime;
+    fprintf(stderr, "beDelayTime = %u\n", maxUdpPayload);
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
 
     // For generating random, distributed numbers
     std::random_device rd;
