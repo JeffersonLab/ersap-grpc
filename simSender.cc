@@ -745,9 +745,6 @@ int main(int argc, char **argv) {
     double lambda = 1.0/beDelayTime;
     fprintf(stderr, "beDelayTime = %u, lambda = %g\n", beDelayTime, lambda);
 
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-
-
     // For generating random, distributed numbers
     std::random_device rd;
     std::mt19937 gen {rd()};
