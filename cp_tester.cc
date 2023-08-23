@@ -675,7 +675,8 @@ static void *fillFifoThread(void *arg) {
  */
 static void *drainFifoThread(void *arg) {
 
-    int id = processThdId++;
+    int id = processThdId.fetch_add(1);
+    std::cerr << "Running drain thread " << id << std::endl;
 
     threadArg *tArg = (threadArg *) arg;
 

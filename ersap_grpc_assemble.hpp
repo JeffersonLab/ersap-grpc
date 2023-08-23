@@ -134,7 +134,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                     not_full.wait(lk, [this]() { return content.size() < capacity; });
                     content.push_back(std::move(item));
                 }
-                not_empty.notify_one();
+                //not_empty.notify_one();
+                not_empty.notify_all();
             }
 
             bool try_push(T &&item) {
@@ -144,7 +145,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                         return false;
                     content.push_back(std::move(item));
                 }
-                not_empty.notify_one();
+                //not_empty.notify_one();
+                not_empty.notify_all();
                 return true;
             }
 
@@ -155,7 +157,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                     item = std::move(content.front());
                     content.pop_front();
                 }
-                not_full.notify_one();
+                //not_full.notify_one();
+                not_full.notify_all();
             }
 
             bool try_pop(T &item) {
@@ -166,7 +169,8 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                     item = std::move(content.front());
                     content.pop_front();
                 }
-                not_full.notify_one();
+                //not_full.notify_one();
+                not_full.notify_all();
                 return true;
             }
 
