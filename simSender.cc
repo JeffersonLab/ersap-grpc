@@ -1054,8 +1054,9 @@ int main(int argc, char **argv) {
 
         // Generate spread in backend processing time
         if (useTimeSpread) {
-            backendTime = (uint32_t) timeDist(gen);
-            fprintf(stderr, "btime = %u\n", backendTime);
+            float val = timeDist(gen);
+            backendTime = (uint32_t) val;
+            fprintf(stderr, "btime = %u, f-> %f\n", backendTime, val);
         }
 
         // Generate spread in buffer size
