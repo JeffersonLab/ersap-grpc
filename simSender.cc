@@ -742,7 +742,8 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Create a variable backend processing time (exponential distribution around the given backend time)
     uint32_t backendTime = beDelayTime;
-    fprintf(stderr, "beDelayTime = %u\n", maxUdpPayload);
+    double lambda = 1.0/beDelayTime;
+    fprintf(stderr, "beDelayTime = %u, lambda = %g\n", beDelayTime, lambda);
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
@@ -753,7 +754,7 @@ int main(int argc, char **argv) {
 
     // exponential distribution for times
     fprintf(stderr, "BACKEND TIME (exp dist) around t = %u  usec\n", beDelayTime);
-    std::exponential_distribution<float> timeDist {(float)beDelayTime};
+    std::exponential_distribution<double> timeDist {lambda};
 
     // normal distribution for times (mean = beDelayTime, stdev = timeSigma), where stdev = FWHM/2.35
     //fprintf(stderr, "BACKEND TIME (normal dist) = %u, time width = %u usec\n", beDelayTime, timeSigma);
@@ -1054,9 +1055,9 @@ int main(int argc, char **argv) {
 
         // Generate spread in backend processing time
         if (useTimeSpread) {
-            float val = timeDist(gen);
-            backendTime = (uint32_t) val;
-            fprintf(stderr, "btime = %u, f-> %f\n", backendTime, val);
+            //double val = timeDist(gen);
+            backendTime = (uint32_t) timeDist(gen);
+            //fprintf(stderr, "btime = %u, t -> %g\n", backendTime, val);
         }
 
         // Generate spread in buffer size
