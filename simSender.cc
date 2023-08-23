@@ -509,7 +509,6 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
     // If we specify the byte/buffer send rate, then all delays are removed
     if (*byteRate > 0 || *bufRate) {
         fprintf(stderr, "Byte rate set to %" PRIu64 " bytes/sec, all delays removed!\n", *byteRate);
-        *bufDelay = false;
         *delayPrescale = 1;
         *delay = 0;
     }
