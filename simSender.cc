@@ -118,7 +118,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                       uint64_t *bufSize, uint64_t *bufRate,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
-                      uint32_t *time, uint32_t *timeSigma, uint32_t *sizeWidth,
+                      uint32_t *time, uint32_t *timeSigma, uint32_t *sizeWidth, // timeSigma currently not used
                       uint32_t *delayWidth, int *cores,  bool *debug,
                       bool *useIPv6, bool *texp, bool *sendSync,
                       char* host, char* cphost, char *interface) {
@@ -1051,6 +1051,7 @@ int main(int argc, char **argv) {
         // Generate spread in backend processing time
         if (useTimeSpread) {
             backendTime = (uint32_t) timeDist(gen);
+            fprintf(stderr, "btime = %u\n", backendTime);
         }
 
         // Generate spread in buffer size
