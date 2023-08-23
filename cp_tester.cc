@@ -93,7 +93,7 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -107,7 +107,8 @@ static void printHelp(char *programName) {
             "        [-name <backend name>]\n",
 
             "        [-count <# of most recent fill values averaged, default 1000>]",
-            "        [-rtime <millisec for reporting fill to CP, default 1 sec>]\n",
+            "        [-rtime <millisec for reporting fill to CP, default 1 sec>]",
+            "        [-thds <# of threads which consume events off Q, default 1, max 12>]\n",
 
             "        [-b <internal buf size to hold event (150kB default)>]",
             "        [-cores <comma-separated list of cores to run on>]",
@@ -145,6 +146,7 @@ static void printHelp(char *programName) {
  * @param fifoSize      filled with max fifo size.
  * @param fillCount     filled with # of fill level measurements to average together before sending.
  * @param reportTime    filled with millisec between reports to CP.
+ * @param processThds   filled with # of threads which pull reassembled events off of Q and "process".
  * @param debug         filled with debug flag.
  * @param useIPv6       filled with use IP version 6 flag.
  * @param cpAddr        filled with grpc server (control plane) IP address to info to.
@@ -160,7 +162,7 @@ static void parseArgs(int argc, char **argv,
                       char *listenAddr, char *token,
                       char *fileName, char *csvFileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
-                      uint32_t *fillCount, uint32_t *reportTime,
+                      uint32_t *fillCount, uint32_t *reportTime, unint32_t *processThds,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
                       float *kp, float *ki, float *kd, float *fill) {
 
@@ -186,6 +188,7 @@ static void parseArgs(int argc, char **argv,
                           {"rtime",   1, nullptr, 15},
                           {"fill",    1, nullptr, 16},
                           {"csv",     1, nullptr, 17},
+                          {"thds",     1, nullptr, 18},
                           {0,         0, 0,    0}
             };
 
@@ -493,6 +496,22 @@ static void parseArgs(int argc, char **argv,
                 strcpy(csvFileName, optarg);
                 break;
 
+            case 18:
+                // # of event processing threads
+                i_tmp = (int)strtol(optarg, nullptr, 0);
+                if (i_tmp > 12) {
+                    *processThds = 12;
+                }
+                else if (i_tmp > 0) {
+                    *processThds = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -thds, # thds > 0 and <= 12\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -520,6 +539,7 @@ static void parseArgs(int argc, char **argv,
 static volatile int64_t totalBytes=0, totalPackets=0, totalEvents=0;
 static volatile int64_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 static volatile int64_t discardedBuiltPkts=0, discardedBuiltEvts=0, discardedBuiltBytes=0;
+static atomic_int processThdId = 0;
 
 
 
@@ -655,6 +675,8 @@ static void *fillFifoThread(void *arg) {
  */
 static void *drainFifoThread(void *arg) {
 
+    int id = processThdId++;
+
     threadArg *tArg = (threadArg *) arg;
 
     auto sharedQ  = tArg->sharedQ;
@@ -676,7 +698,7 @@ static void *drainFifoThread(void *arg) {
         if (debug) {
             // Print out the packet sequence in the order they arrived.
             // This data was placed into buf in the getReassembledBuffer() routine (see fillFifoThread thread above).
-            fprintf(fp, "Pkt delay %u usec, %u total pkts, arrival sequence:\n", delay, totalPkts);
+            fprintf(fp, "Thd %d: pkt delay %u usec, %u total pkts, arrival sequence:\n", id, delay, totalPkts);
 
             uint32_t seq;
             for (int i=0; i < totalPkts; i++) {
@@ -856,6 +878,8 @@ int main(int argc, char **argv) {
     uint32_t fcount = 1000;
     // time period in millisec for reporting to CP
     uint32_t reportTime = 1000;
+    // # thds to process reassembled events
+    uint32_t processThds = 1;
 
     char cpAddr[16];
     memset(cpAddr, 0, 16);
@@ -883,7 +907,7 @@ int main(int argc, char **argv) {
 
     parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, csvFileName,
-              &bufSize, &fifoCapacity, &fcount, &reportTime,
+              &bufSize, &fifoCapacity, &fcount, &reportTime, &processThds,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill);
 
     // give it a default name
@@ -1033,7 +1057,7 @@ int main(int argc, char **argv) {
     }
 
     ///////////////////////////////////
-    /// Start Fill & Drain Threads ///
+    ///     Start Fill Thread      ///
     //////////////////////////////////
 
     // Statistics
@@ -1067,12 +1091,18 @@ int main(int argc, char **argv) {
         return(1);
     }
 
-    pthread_t thdDrain;
-    status = pthread_create(&thdDrain, NULL, drainFifoThread, (void *) targ);
-    if (status != 0) {
-        if (writeToFile) fprintf(fp, "error creating drain thread\n");
-        perror("error creating drain thread");
-        return(1);
+    ///////////////////////////////////
+    ///    Start Drain Threads     ///
+    //////////////////////////////////
+
+    for (int i=0; i < processThds; i++) {
+        pthread_t thdDrain;
+        status = pthread_create(&thdDrain, NULL, drainFifoThread, (void *) targ);
+        if (status != 0) {
+            if (writeToFile) fprintf(fp, "error creating drain thread\n");
+            perror("error creating drain thread");
+            return (1);
+        }
     }
 
     ////////////////////////////
