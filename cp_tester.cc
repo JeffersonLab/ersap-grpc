@@ -539,7 +539,7 @@ static void parseArgs(int argc, char **argv,
 static volatile int64_t totalBytes=0, totalPackets=0, totalEvents=0;
 static volatile int64_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 static volatile int64_t discardedBuiltPkts=0, discardedBuiltEvts=0, discardedBuiltBytes=0;
-static std::atomic_int processThdId = 0;
+static std::atomic_int processThdId {0};
 
 
 
