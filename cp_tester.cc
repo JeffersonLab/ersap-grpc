@@ -162,7 +162,7 @@ static void parseArgs(int argc, char **argv,
                       char *listenAddr, char *token,
                       char *fileName, char *csvFileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
-                      uint32_t *fillCount, uint32_t *reportTime, unint32_t *processThds,
+                      uint32_t *fillCount, uint32_t *reportTime, uint32_t *processThds,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
                       float *kp, float *ki, float *kd, float *fill) {
 
@@ -539,7 +539,7 @@ static void parseArgs(int argc, char **argv,
 static volatile int64_t totalBytes=0, totalPackets=0, totalEvents=0;
 static volatile int64_t droppedPackets=0, droppedEvents=0, droppedBytes=0;
 static volatile int64_t discardedBuiltPkts=0, discardedBuiltEvts=0, discardedBuiltBytes=0;
-static atomic_int processThdId = 0;
+static std::atomic_int processThdId = 0;
 
 
 
