@@ -68,12 +68,13 @@ using namespace ejfat;
 
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6] [-sync]\n",
 
             "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]",
             "        [-bufdelay] (delay between each buffer, not packet)",
+            "        [-delaywidth <microsec 1/2 width of gaussian for variable sending delay>]\n",
             "        [-bufrate  <buffers per sec>]",
             "        [-byterate <bytes per sec>]\n",
 
@@ -118,8 +119,8 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
                       uint32_t *time, uint32_t *timeWidth, uint32_t *sizeWidth,
-                      int *cores,
-                      bool *debug, bool *useIPv6, bool *bufDelay, bool *sendSync,
+                      uint32_t *delayWidth, int *cores,  bool *debug,
+                      bool *useIPv6, bool *bufDelay, bool *sendSync,
                       char* host, char* cphost, char *interface) {
 
     *mtu = 0;
@@ -147,6 +148,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
              {"bwidth",   1, NULL, 18},
              {"cphost",   1, NULL, 19},
              {"cpport",   1, NULL, 20},
+             {"delaywidth",   1, NULL, 21},
              {0,       0, 0,    0}
             };
 
@@ -475,6 +477,19 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 }
                 break;
 
+            case 21:
+                // Delay width - gaussian width of arrival time intervals
+                // centered on size given by -b option
+                tmp = strtol(optarg, nullptr, 0);
+                if (tmp >= 0) {
+                    *delayWidth = tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -bwidth, byte width >= 0\n");
+                    exit(-1);
+                }
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -609,7 +624,7 @@ static void *thread(void *arg) {
  */
 int main(int argc, char **argv) {
 
-    uint32_t beDelayTime = 0, timeWidth = 0, sizeWidth = 0;
+    uint32_t beDelayTime = 0, timeWidth = 0, sizeWidth = 0, delayWidth = 0;
     uint32_t tickPrescale = 1;
     uint32_t delayPrescale = 1, delayCounter = 0;
     uint32_t offset = 0, sendBufSize = 0;
@@ -624,7 +639,7 @@ int main(int argc, char **argv) {
     bool useIPv6 = false, bufDelay = false;
     bool setBufRate = false, setByteRate = false;
     bool sendSync = false;
-    bool useSizeSpread = false, useTimeSpread = false;
+    bool useSizeSpread = false, useTimeSpread = false, useDelaySpread = false;
 
     char syncBuf[28];
     char host[INPUT_LENGTH_MAX], cphost[INPUT_LENGTH_MAX], interface[16];
@@ -639,9 +654,9 @@ int main(int argc, char **argv) {
     }
 
     parseArgs(argc, argv, &mtu, &protocol, &entropy, &version, &dataId, &port, &cpport, &tick,
-              &delay, &bufSize, &bufRate, &byteRate, &sendBufSize,
-              &delayPrescale, &tickPrescale, &beDelayTime, &timeWidth, &sizeWidth, cores, &debug,
-              &useIPv6, &bufDelay, &sendSync, host, cphost, interface);
+              &delay, &bufSize, &bufRate, &byteRate, &sendBufSize, &delayPrescale, &tickPrescale,
+              &beDelayTime, &timeWidth, &sizeWidth, &delayWidth, cores, &debug, &useIPv6, &bufDelay,
+              &sendSync, host, cphost, interface);
 
 #ifdef __linux__
 
@@ -708,6 +723,11 @@ int main(int argc, char **argv) {
         useSizeSpread = true;
     }
 
+    // Do we use gaussian distribution of interarrival times?
+    if (delayWidth > 0) {
+        useDelaySpread = true;
+    }
+
     // Break data into multiple packets of max MTU size.
     // If the mtu was not set on the command line, get it progamatically
     if (mtu == 0) {
@@ -730,7 +750,7 @@ int main(int argc, char **argv) {
 
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    // Create a variable backend processing time (gausssian around the given backend time)
+    // Create a variable backend processing time (exponential distribution around the given backend time)
     uint32_t backendTime = beDelayTime;
     fprintf(stderr, "BACKEND TIME = %u, useTimeWidth = %s\n", beDelayTime, btoa(useTimeSpread));
 
@@ -738,7 +758,8 @@ int main(int argc, char **argv) {
     std::random_device rd;
     std::mt19937 gen {rd()};
 
-    // Gaussian dist for times
+    // distribution for times
+    // consider: std::exponential_distribution<float> timeDist {beDelayTime};
     std::normal_distribution<float> timeDist {(float)beDelayTime, (float)timeWidth};
 
     // To use this to generate time:
@@ -759,6 +780,9 @@ int main(int argc, char **argv) {
 
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Gaussian dist for interarrival times
+    std::normal_distribution<float> delayDist {(float)bufferDelay, (float)delayWidth};
 
     // Create UDP sockets (one for control plane, the other for backend)
     int cpSocket, clientSocket;
@@ -925,7 +949,7 @@ int main(int argc, char **argv) {
     bool lastBuffer  = true;
     delayCounter = delayPrescale;
 
-    fprintf(stdout, "delay prescale = %u\n", delayPrescale);
+    fprintf(stderr, "delay prescale = %u\n", delayPrescale);
 
     // Statistics & rate setting
     int64_t packetsSent=0;
@@ -986,6 +1010,9 @@ int main(int argc, char **argv) {
 
     uint64_t evtRate;
     uint64_t bufsSent = 0UL;
+    uint64_t totalBufsSent = 0UL;  // unlike bufsSent, does not get reset every sec
+
+    fprintf(stdout, "timestamp,event_number,event_rate_this_period,total_events_sent\n");
 
     while (true) {
 
@@ -1047,7 +1074,8 @@ int main(int argc, char **argv) {
         }
 
         bufsSent++;
-        totalBytes += bufByteSize;
+        totalBufsSent++;
+        totalBytes   += bufByteSize;
         totalPackets += packetsSent;
         totalEvents++;
         offset = 0;
@@ -1063,7 +1091,22 @@ int main(int argc, char **argv) {
                 evtRate = bufsSent*1000000000/syncTime;
 
                 // Send sync message to same destination
-if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %" PRIu64 "\n\n", tick, evtRate);
+                if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %" PRIu64 "\n\n", tick, evtRate);
+
+                auto now = std::chrono::system_clock::now();
+                std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+                char timestamp[20];
+                strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now_c));
+                fprintf(
+                    stdout,
+                    "%s,%d,%f,%d\n",
+                    timestamp,
+                    (int)tick,
+                    (double)evtRate,
+                    (int)totalBufsSent
+                );
+                fflush(stdout);
+
                 setSyncData(syncBuf, version, dataId, tick, evtRate, syncTime);
                 err = send(cpSocket, syncBuf, 28, 0);
                 if (err == -1) {
@@ -1080,7 +1123,11 @@ if (debug) fprintf(stderr, "send tick %" PRIu64 ", evtRate %" PRIu64 "\n\n", tic
         // delay if any
         if (bufDelay) {
             if (--delayCounter < 1) {
-                std::this_thread::sleep_for(std::chrono::microseconds(bufferDelay));
+                uint32_t nextDelay = bufferDelay;
+                if (useDelaySpread) {
+                    nextDelay = std::round(delayDist(gen));
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(nextDelay));
                 delayCounter = delayPrescale;
             }
         }
