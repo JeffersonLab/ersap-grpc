@@ -68,18 +68,18 @@ using namespace ejfat;
 
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6] [-sync]\n",
 
-            "        [-d <delay in microsec between packets or buffers depending on -bufdelay>]",
-            "        [-bufdelay] (delay between each buffer, not packet)",
-            "        [-delaywidth <microsec 1/2 width of gaussian for variable sending delay>]\n",
+            "        [-d <microsec mean delay between sending buffers>]",
+            "        [-delaywidth <microsec stddev (1/2 width) of gaussian for variable sending delay>]\n",
+
             "        [-bufrate  <buffers per sec>]",
             "        [-byterate <bytes per sec>]\n",
 
-            "        [-time <microsec for receiver to delay to simulate processing>]",
-            "        [-twidth <microsec 1/2 width of gaussian for variable processing delay>]\n",
+            "        [-time <microsec of mean backend simulated processing>]",
+            "        [-texp (use exponential dist for spread of backend processing time, no arg)]\n",
 
             "        [-host <destination host (default 127.0.0.1)>]",
             "        [-p <destination UDP port (default 19522)>]\n",
@@ -118,9 +118,9 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                       uint64_t *bufSize, uint64_t *bufRate,
                       uint64_t *byteRate, uint32_t *sendBufSize,
                       uint32_t *delayPrescale, uint32_t *tickPrescale,
-                      uint32_t *time, uint32_t *timeWidth, uint32_t *sizeWidth,
+                      uint32_t *time, uint32_t *timeSigma, uint32_t *sizeWidth,
                       uint32_t *delayWidth, int *cores,  bool *debug,
-                      bool *useIPv6, bool *bufDelay, bool *sendSync,
+                      bool *useIPv6, bool *texp, bool *sendSync,
                       char* host, char* cphost, char *interface) {
 
     *mtu = 0;
@@ -139,7 +139,7 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
              {"dpre",     1, NULL, 9},
              {"tpre",     1, NULL, 10},
              {"ipv6",     0, NULL, 11},
-             {"bufdelay", 0, NULL, 12},
+             {"texp",     0, NULL, 12},
              {"cores",    1, NULL, 13},
              {"bufrate",  1, NULL, 14},
              {"byterate", 1, NULL, 15},
@@ -347,8 +347,8 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 break;
 
             case 12:
-                // delay is between buffers not packets
-                *bufDelay = true;
+                // use exponential dist of simulated backend processing times
+                *texp = true;
                 break;
 
             case 13:
@@ -452,14 +452,15 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 break;
 
             case 17:
-                // Time width - gaussian width of times for receiver to delay,
-                // centered on time given by -time option
+                // Time stdev - approx gaussian 1/2 width of times for receiver to delay,
+                // centered on time given by -time option.
+                // CURRENTLY THIS IS NOT USED as we've switched to exponential dist.
                 tmp = strtol(optarg, nullptr, 0);
                 if (tmp >= 0) {
-                    *timeWidth = tmp;
+                    *timeSigma = tmp;
                 }
                 else {
-                    fprintf(stderr, "Invalid argument to -twidth, time width >= 0\n");
+                    fprintf(stderr, "Invalid argument to -twidth, time sigma >= 0\n");
                     exit(-1);
                 }
                 break;
@@ -624,11 +625,12 @@ static void *thread(void *arg) {
  */
 int main(int argc, char **argv) {
 
-    uint32_t beDelayTime = 0, timeWidth = 0, sizeWidth = 0, delayWidth = 0;
+    uint32_t timeSigma = 0; // Currently not used, since we switched from gaussian to exp
+    uint32_t beDelayTime = 0, sizeWidth = 0, delayWidth = 0;
     uint32_t tickPrescale = 1;
     uint32_t delayPrescale = 1, delayCounter = 0;
     uint32_t offset = 0, sendBufSize = 0;
-    uint32_t delay = 0, packetDelay = 0, bufferDelay = 0;
+    uint32_t delay = 0;
     uint64_t bufRate = 0L, bufSize = 62500L, byteRate = 0L;
     uint16_t port = 0x4c42, cpport = 0x4c43; // 19522 & 19523
     uint64_t tick = 0;
@@ -636,7 +638,7 @@ int main(int argc, char **argv) {
     int mtu, version = 2, protocol = 1, entropy = 0;
     uint16_t dataId = 1;
     bool debug = false;
-    bool useIPv6 = false, bufDelay = false;
+    bool useIPv6 = false, useExpDist = false;
     bool setBufRate = false, setByteRate = false;
     bool sendSync = false;
     bool useSizeSpread = false, useTimeSpread = false, useDelaySpread = false;
@@ -655,7 +657,7 @@ int main(int argc, char **argv) {
 
     parseArgs(argc, argv, &mtu, &protocol, &entropy, &version, &dataId, &port, &cpport, &tick,
               &delay, &bufSize, &bufRate, &byteRate, &sendBufSize, &delayPrescale, &tickPrescale,
-              &beDelayTime, &timeWidth, &sizeWidth, &delayWidth, cores, &debug, &useIPv6, &bufDelay,
+              &beDelayTime, &timeSigma, &sizeWidth, &delayWidth, cores, &debug, &useIPv6, &useExpDist,
               &sendSync, host, cphost, interface);
 
 #ifdef __linux__
@@ -693,17 +695,6 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "send = %s\n", btoa(send));
 
-    if (bufDelay) {
-        // Delay between buffers?
-        packetDelay = 0;
-        bufferDelay = delay;
-    }
-    else {
-        // Delay between packets?
-        packetDelay = delay;
-        bufferDelay = 0;
-    }
-
     if (byteRate > 0) {
         // Are we trying to send a fixed byte rate?
         setByteRate = true;
@@ -713,8 +704,8 @@ int main(int argc, char **argv) {
         setBufRate = true;
     }
 
-    // Do we use gaussian distribution of simulated BE processing times?
-    if (timeWidth > 0 && beDelayTime > 0) {
+    // Do we use exponential distribution of simulated BE processing times?
+    if (useExpDist && beDelayTime > 0) {
         useTimeSpread = true;
     }
 
@@ -752,15 +743,18 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Create a variable backend processing time (exponential distribution around the given backend time)
     uint32_t backendTime = beDelayTime;
-    fprintf(stderr, "BACKEND TIME = %u, useTimeWidth = %s\n", beDelayTime, btoa(useTimeSpread));
 
     // For generating random, distributed numbers
     std::random_device rd;
     std::mt19937 gen {rd()};
 
-    // distribution for times
-    // consider: std::exponential_distribution<float> timeDist {beDelayTime};
-    std::normal_distribution<float> timeDist {(float)beDelayTime, (float)timeWidth};
+    // exponential distribution for times
+    fprintf(stderr, "BACKEND TIME (exp dist) around t = %u  usec\n", beDelayTime);
+    std::exponential_distribution<float> timeDist {(float)beDelayTime};
+
+    // normal distribution for times (mean = beDelayTime, stdev = timeSigma), where stdev = FWHM/2.35
+    //fprintf(stderr, "BACKEND TIME (normal dist) = %u, time width = %u usec\n", beDelayTime, timeSigma);
+    //std::normal_distribution<float> timeDist {(float)beDelayTime, (float)timeSigma};
 
     // To use this to generate time:
     // float r = timeDist(gen);
@@ -782,7 +776,9 @@ int main(int argc, char **argv) {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Gaussian dist for interarrival times
-    std::normal_distribution<float> delayDist {(float)bufferDelay, (float)delayWidth};
+    std::normal_distribution<float> delayDist {(float)delay, (float)delayWidth};
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Create UDP sockets (one for control plane, the other for backend)
     int cpSocket, clientSocket;
@@ -1065,7 +1061,7 @@ int main(int argc, char **argv) {
 
         err = sendPacketizedBuf(bufByteSize, maxUdpPayload, backendTime, clientSocket,
                                 tick, protocol, entropy, version, dataId,
-                                packetDelay, delayPrescale, &delayCounter,
+                                0, delayPrescale, &delayCounter,
                                 debug, &packetsSent);
         if (err < 0) {
             // Should be more info in errno
@@ -1121,9 +1117,9 @@ int main(int argc, char **argv) {
 
 
         // delay if any
-        if (bufDelay) {
+        if (delay > 0) {
             if (--delayCounter < 1) {
-                uint32_t nextDelay = bufferDelay;
+                uint32_t nextDelay = delay;
                 if (useDelaySpread) {
                     nextDelay = std::round(delayDist(gen));
                 }
