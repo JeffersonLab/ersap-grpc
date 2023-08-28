@@ -93,7 +93,7 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -108,6 +108,7 @@ static void printHelp(char *programName) {
 
             "        [-count <# of most recent fill values averaged, default 1000>]",
             "        [-rtime <millisec for reporting fill to CP, default 1 sec>]",
+            "        [-factor <real # to multiply process time of event, default 1., > 0.]",
             "        [-thds <# of threads which consume events off Q, default 1, max 12>]\n",
 
             "        [-b <internal buf size to hold event (150kB default)>]",
@@ -155,6 +156,7 @@ static void printHelp(char *programName) {
  * @param ki            filled with PID integral constant.
  * @param kd            filled with PID differential constant.
  * @param fill          filled with fixed value to report as fifo fill level (0-1).
+ * @param ffactor       filled with fudge factor to multiply event processing time with.
  */
 static void parseArgs(int argc, char **argv,
                       int *cores, float *setPt, uint16_t *cpPort,
@@ -164,7 +166,7 @@ static void parseArgs(int argc, char **argv,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       uint32_t *fillCount, uint32_t *reportTime, uint32_t *processThds,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
-                      float *kp, float *ki, float *kd, float *fill) {
+                      float *kp, float *ki, float *kd, float *fill, float *ffactor) {
 
     int c, i_tmp;
     bool help = false;
@@ -182,13 +184,14 @@ static void parseArgs(int argc, char **argv,
                           {"token",    1, nullptr, 9},
                           {"file",     1, nullptr, 10},
                           {"Kp",       1, nullptr, 11},
-                          {"Ki",      1, nullptr, 12},
-                          {"Kd",      1, nullptr, 13},
-                          {"count",   1, nullptr, 14},
-                          {"rtime",   1, nullptr, 15},
-                          {"fill",    1, nullptr, 16},
-                          {"csv",     1, nullptr, 17},
+                          {"Ki",       1, nullptr, 12},
+                          {"Kd",       1, nullptr, 13},
+                          {"count",    1, nullptr, 14},
+                          {"rtime",    1, nullptr, 15},
+                          {"fill",     1, nullptr, 16},
+                          {"csv",      1, nullptr, 17},
                           {"thds",     1, nullptr, 18},
+                          {"factor",   1, nullptr, 19},
                           {0,         0, 0,    0}
             };
 
@@ -512,6 +515,26 @@ static void parseArgs(int argc, char **argv,
                 }
                 break;
 
+            case 19:
+                // Processing time fudge factor
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -factor\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp < 0.F) {
+                    fprintf(stderr, "Values to -factor must be > 0\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *ffactor = sp;
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -553,6 +576,7 @@ typedef struct threadArg_t {
     uint32_t bufSize;
     bool debug;
     bool writeToFile;
+    float ffactor;
     FILE *fp;
 } threadArg;
 
@@ -682,6 +706,7 @@ static void *drainFifoThread(void *arg) {
 
     auto sharedQ  = tArg->sharedQ;
     bool debug    = tArg->debug;
+    float ffactor = tArg->ffactor;
     FILE *fp      = tArg->fp;
 
     uint32_t delay, totalPkts, pktSequence;
@@ -709,7 +734,8 @@ static void *drainFifoThread(void *arg) {
             fprintf(fp, "\n");
         }
 
-        // Delay to simulate data processing
+        // Delay to simulate data processing. Fudge factor can tweak it to make machine look slower or faster
+        delay = (uint32_t) ((float)delay * ffactor);
         std::this_thread::sleep_for(std::chrono::microseconds(delay));
         eventsProcessed++;
     }
@@ -857,6 +883,7 @@ int main(int argc, char **argv) {
     float setFill  = -1.0F;
     float pidError = 0.F;
     float setPoint = 0.F;   // set fifo to 1/2 full by default
+    float ffactor  = 1.F;
 
     uint16_t cpPort = 18347;
     bool debug = false;
@@ -909,7 +936,7 @@ int main(int argc, char **argv) {
     parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, csvFileName,
               &bufSize, &fifoCapacity, &fcount, &reportTime, &processThds,
-              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill);
+              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill, &ffactor);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -1083,6 +1110,7 @@ int main(int argc, char **argv) {
     targ->debug = debug;
     targ->cores = cores;
     targ->fp = fp;
+    targ->ffactor = ffactor;
 
     pthread_t thdFill;
     status = pthread_create(&thdFill, NULL, fillFifoThread, (void *) targ);
