@@ -93,7 +93,7 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -107,7 +107,8 @@ static void printHelp(char *programName) {
             "        [-name <backend name>]\n",
 
             "        [-count <# of most recent fill values averaged, default 1000>]",
-            "        [-rtime <millisec for reporting fill to CP, default 1 sec>]",
+            "        [-rtime <millisec for reporting fill to CP, default 1000>]",
+            "        [-stime <fifo sample time in millisec, default 1>]",
             "        [-factor <real # to multiply process time of event, default 1., > 0.]",
             "        [-thds <# of threads which consume events off Q, default 1, max 12>]\n",
 
@@ -147,6 +148,7 @@ static void printHelp(char *programName) {
  * @param fifoSize      filled with max fifo size.
  * @param fillCount     filled with # of fill level measurements to average together before sending.
  * @param reportTime    filled with millisec between reports to CP.
+ * @param sampleTime    filled with millisec between reports to CP.
  * @param processThds   filled with # of threads which pull reassembled events off of Q and "process".
  * @param debug         filled with debug flag.
  * @param useIPv6       filled with use IP version 6 flag.
@@ -164,7 +166,8 @@ static void parseArgs(int argc, char **argv,
                       char *listenAddr, char *token,
                       char *fileName, char *csvFileName,
                       uint32_t *bufSize, uint32_t *fifoSize,
-                      uint32_t *fillCount, uint32_t *reportTime, uint32_t *processThds,
+                      uint32_t *fillCount, uint32_t *reportTime,
+                      uint32_t *sampleTime, uint32_t *processThds,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
                       float *kp, float *ki, float *kd, float *fill, float *ffactor) {
 
@@ -192,6 +195,7 @@ static void parseArgs(int argc, char **argv,
                           {"csv",      1, nullptr, 17},
                           {"thds",     1, nullptr, 18},
                           {"factor",   1, nullptr, 19},
+                          {"stime",    1, nullptr, 20},
                           {0,         0, 0,    0}
             };
 
@@ -535,6 +539,19 @@ static void parseArgs(int argc, char **argv,
                 *ffactor = sp;
                 break;
 
+            case 20:
+                // fifo sampling time in millisec
+                i_tmp = (int) strtol(optarg, nullptr, 0);
+                if (i_tmp > 0) {
+                    *sampleTime = i_tmp;
+                }
+                else {
+                    fprintf(stderr, "Invalid argument to -stime, must be >= 1 ms\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -555,6 +572,17 @@ static void parseArgs(int argc, char **argv,
         printHelp(argv[0]);
         exit(2);
     }
+    else if (reportTime < sampleTime) {
+        fprintf(stderr, "Sample time must be <= reporting time\n\n");
+        printHelp(argv[0]);
+        exit(-1);
+    }
+    else if (reportTime % sampleTime != 0)) {
+        fprintf(stderr, "Reporting time must be integer multiple of sample time\n\n");
+        printHelp(argv[0]);
+        exit(-1);
+    }
+
 }
 
 
@@ -906,6 +934,8 @@ int main(int argc, char **argv) {
     uint32_t fcount = 1000;
     // time period in millisec for reporting to CP
     uint32_t reportTime = 1000;
+    // time period in millisec for sampling fifo
+    uint32_t sampleTime = 1;
     // # thds to process reassembled events
     uint32_t processThds = 1;
 
@@ -935,7 +965,7 @@ int main(int argc, char **argv) {
 
     parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, csvFileName,
-              &bufSize, &fifoCapacity, &fcount, &reportTime, &processThds,
+              &bufSize, &fifoCapacity, &fcount, &reportTime, &sampleTime, &processThds,
               &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill, &ffactor);
 
     // give it a default name
@@ -1158,20 +1188,26 @@ int main(int argc, char **argv) {
         return(1);
     }
 
-    // Add stuff to prevent anti-aliasing.
-    // If sampling fifo level every millisec but that level is changing much more quickly,
-    // the sent value will NOT be an accurate representation. It will include a lot of noise.
-    // To prevent this,
-    // keep a running average of the fill %, so its reported value is a more accurate portrayal
-    // of what's really going on. In this case a running avg is taken over the reporting time.
+    // Write header to data file
+    if (writeToCsvFile) {
+        fprintf(csvFp,
+                "timestamp,fifo_mean_fill_pct,fifo_mean_fill,pid_control_variable,events_reassembled,events_processed\n");
+    }
 
-    float deltaT = (1.0/1000.0); // 1 millisec in seconds
-    int sampleMicroSecs = 1000; // Sample data every 1 millisec
-    // # of loops (samples) to comprise one reporting period =
-    int loopMax   = 1000 * reportTime / sampleMicroSecs; // remember, report time is in millisec
+    // Add stuff to prevent anti-aliasing.
+    // If sampling fifo level every N millisec but that level is changing much more quickly,
+    // the sent value will NOT be an accurate representation. It will include a lot of noise.
+    // To prevent this, keep a running average of the fill %, so its reported value is a more
+    // accurate portrayal of what's really going on.
+
+    float deltaT; // time in millisec
+
+    // Find # of loops (samples) to comprise one reporting period.
+    // Command line enforces report time to be integer multiple of sampleTime.
+    int loopMax   = reportTime / sampleTime; // report & sample time are both in millisec
     int loopCount = loopMax;    // use to track # loops made
 
-
+    // Keep a running avg of fifo fill over fcount samples
     float runningFillTotal = 0., fillAvg;
     float fillValues[fcount];
     memset(fillValues, 0, fcount*sizeof(float));
@@ -1190,15 +1226,9 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     prevAbsTime = 1000L*(t1.tv_sec) + (t1.tv_nsec)/1000000L;
 
-    // Write header to data file
-    if (writeToCsvFile) {
-        fprintf(csvFp,
-                "timestamp,fifo_mean_fill_pct,fifo_mean_fill,pid_control_variable,events_reassembled,events_processed\n");
-    }
-
     while (true) {
-        // Delay between data points
-        std::this_thread::sleep_for(std::chrono::microseconds(sampleMicroSecs));
+        // Delay between sampling fifo points
+        std::this_thread::sleep_for(std::chrono::milliseconds(sampleTime));
 
         // Read current fifo level
         curFill = sharedQ->size();
