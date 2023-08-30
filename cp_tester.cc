@@ -577,7 +577,7 @@ static void parseArgs(int argc, char **argv,
         printHelp(argv[0]);
         exit(-1);
     }
-    else if (reportTime % sampleTime != 0)) {
+    else if (reportTime % sampleTime != 0) {
         fprintf(stderr, "Reporting time must be integer multiple of sample time\n\n");
         printHelp(argv[0]);
         exit(-1);
