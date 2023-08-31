@@ -106,7 +106,7 @@ static void printHelp(char *programName) {
             "        [-cp_port <control plane grpc port (default 18347)>]",
             "        [-name <backend name>]\n",
 
-            "        [-count <# of most recent fill values averaged, default 1000>]",
+            "        [-count <# of fill values averaged in report time, default/max = rtime/stime>]",
             "        [-rtime <millisec for reporting fill to CP, default 1000>]",
             "        [-stime <fifo sample time in millisec, default 1>]",
             "        [-factor <real # to multiply process time of event, default 1., > 0.]",
@@ -985,6 +985,18 @@ int main(int argc, char **argv) {
     // convert integer range in PortRange enum-
     auto pRange = PortRange(range);
 
+    // We report to the CP the average fifo fill level within 1 reporting time period.
+    // The max number of fifo samples that can be taken in the reporting time is the limit
+    // of the # of samples that can be averaged together. Any thing less is fine.
+    // So ensure this limit is held here:
+    if (fcount > reportTime/sampleTime) {
+        fcount = reportTime/sampleTime;
+        fprintf(stderr, "recalculate # of fifo level samples to be averaged, to %u\n", fcount);
+    }
+    else {
+        fprintf(stderr, "set # of fifo level samples to be averaged, to %u\n", fcount);
+    }
+
     ///////////////////////////////////
     ///       output to file(s)     ///
     ///////////////////////////////////
@@ -1207,17 +1219,16 @@ int main(int argc, char **argv) {
     int loopMax   = reportTime / sampleTime; // report & sample time are both in millisec
     int loopCount = loopMax;    // use to track # loops made
 
+    fprintf(fp, "reportTime = %u msec, sampleTime = %u msec, loopMax = %d, loopCount = %d\n", reportTime, sampleTime, loopMax, loopCount);
+
     // Keep a running avg of fifo fill over fcount samples
     float runningFillTotal = 0., fillAvg;
     float fillValues[fcount];
     memset(fillValues, 0, fcount*sizeof(float));
 
     // Keep circulating thru array. Highest index is fcount - 1.
-    // The first time thru, we don't want to over-weight with (fcount - 1) zero entries.
-    // So we read fcount entries first, before we start keeping stats & reporting level.
     float prevFill, curFill, fillPercent;
-    bool startingUp = true;
-    int fillIndex = 0, firstLoopCounter = 1;
+    int fillIndex = 0;
 
     // time stuff
     struct timespec t1, t2;
@@ -1243,26 +1254,7 @@ int main(int argc, char **argv) {
         fillIndex++;
         fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
 
-        if (startingUp) {
-            if (firstLoopCounter++ >= fcount) {
-                // Done with first fcount loops
-                startingUp = false;
-            }
-            else {
-                if (firstLoopCounter == fcount) {
-                    // Start the clock NOW
-                    clock_gettime(CLOCK_MONOTONIC, &t1);
-                }
-                // Don't start sending data or recording values
-                // until the startup time (fcount loops) is over.
-                continue;
-            }
-            fillAvg = runningFillTotal / static_cast<float>(fcount);
-        }
-        else {
-            fillAvg = runningFillTotal / static_cast<float>(fcount);
-        }
-
+        fillAvg = runningFillTotal / static_cast<float>(fcount);
         fillPercent = fillAvg / static_cast<float>(fifoCapacity);
 
         // Read time
