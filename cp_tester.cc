@@ -106,7 +106,7 @@ static void printHelp(char *programName) {
             "        [-cp_port <control plane grpc port (default 18347)>]",
             "        [-name <backend name>]\n",
 
-            "        [-count <# of fill values averaged in report time, default/max = rtime/stime>]",
+            "        [-count <# of fill values averaged, default = 1000>]",
             "        [-rtime <millisec for reporting fill to CP, default 1000>]",
             "        [-stime <fifo sample time in millisec, default 1>]",
             "        [-factor <real # to multiply process time of event, default 1., > 0.]",
@@ -924,6 +924,7 @@ int main(int argc, char **argv) {
     uint16_t port = 17750;
 
     uint32_t fifoCapacity = 1000;
+    float    fifoCapacityFlt;
 
     // PID loop variables
     float Kp = 0.8;
@@ -932,6 +933,7 @@ int main(int argc, char **argv) {
 
     // # of fill values to average when reporting to grpc
     uint32_t fcount = 1000;
+    float    fcountFlt;
     // time period in millisec for reporting to CP
     uint32_t reportTime = 1000;
     // time period in millisec for sampling fifo
@@ -985,17 +987,9 @@ int main(int argc, char **argv) {
     // convert integer range in PortRange enum-
     auto pRange = PortRange(range);
 
-    // We report to the CP the average fifo fill level within 1 reporting time period.
-    // The max number of fifo samples that can be taken in the reporting time is the limit
-    // of the # of samples that can be averaged together. Any thing less is fine.
-    // So ensure this limit is held here:
-    if (fcount > reportTime/sampleTime) {
-        fcount = reportTime/sampleTime;
-        fprintf(stderr, "recalculate # of fifo level samples to be averaged, to %u\n", fcount);
-    }
-    else {
-        fprintf(stderr, "set # of fifo level samples to be averaged, to %u\n", fcount);
-    }
+    // Change to floats for later computations
+    fifoCapacityFlt = static_cast<float>(fifoCapacity);
+    fcountFlt = static_cast<float>(fcount);
 
     ///////////////////////////////////
     ///       output to file(s)     ///
@@ -1254,8 +1248,8 @@ int main(int argc, char **argv) {
         fillIndex++;
         fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
 
-        fillAvg = runningFillTotal / static_cast<float>(fcount);
-        fillPercent = fillAvg / static_cast<float>(fifoCapacity);
+        fillAvg = runningFillTotal / fcountFlt;
+        fillPercent = fillAvg / fifoCapacityFlt;
 
         // Read time
         clock_gettime(CLOCK_MONOTONIC, &t2);
