@@ -93,7 +93,7 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -116,6 +116,7 @@ static void printHelp(char *programName) {
             "        [-cores <comma-separated list of cores to run on>]",
             "        [-fifo <fifo size (1000 default)>]",
             "        [-s <PID fifo set point (0 default)>]",
+            "        [-pid <set max EPR in Hz (min 1) and have PID control on relative incoming rate>]",
             "        [-fill <set reported fifo fill %, 0-1 (and pid error to 0) for testing>]\n",
 
             "        [-Kp <proportional gain (0.5 default)>]",
@@ -159,6 +160,7 @@ static void printHelp(char *programName) {
  * @param kd            filled with PID differential constant.
  * @param fill          filled with fixed value to report as fifo fill level (0-1).
  * @param ffactor       filled with fudge factor to multiply event processing time with.
+ * @param maxEPR        filled with max event processing rate for node and have PID key on relative incoming ev rate.
  */
 static void parseArgs(int argc, char **argv,
                       int *cores, float *setPt, uint16_t *cpPort,
@@ -169,7 +171,8 @@ static void parseArgs(int argc, char **argv,
                       uint32_t *fillCount, uint32_t *reportTime,
                       uint32_t *sampleTime, uint32_t *processThds,
                       bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
-                      float *kp, float *ki, float *kd, float *fill, float *ffactor) {
+                      float *kp, float *ki, float *kd,
+                      float *fill, float *ffactor, float *maxEPR) {
 
     int c, i_tmp;
     bool help = false;
@@ -196,6 +199,7 @@ static void parseArgs(int argc, char **argv,
                           {"thds",     1, nullptr, 18},
                           {"factor",   1, nullptr, 19},
                           {"stime",    1, nullptr, 20},
+                          {"pid",      1, nullptr, 21},
                           {0,         0, 0,    0}
             };
 
@@ -550,6 +554,26 @@ static void parseArgs(int argc, char **argv,
                     printHelp(argv[0]);
                     exit(-1);
                 }
+                break;
+
+            case 21:
+                // set max event processing rate in Hz and use relative incoming ev rate for PID control
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -pid\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp < 1.F) {
+                    fprintf(stderr, "Values to -pid must be >= 1.\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *maxEPR = sp;
                 break;
 
             case 'v':
@@ -908,10 +932,11 @@ int main(int argc, char **argv) {
     uint32_t bufSize = 150000; // 150kB default
     int cores[10];
 
-    float setFill  = -1.0F;
-    float pidError = 0.F;
-    float setPoint = 0.F;   // set fifo to 1/2 full by default
-    float ffactor  = 1.F;
+    float setFill   = -1.0F;
+    float pidError  = 0.F;
+    float setPoint  = 0.F;   // set fifo to 1/2 full by default
+    float ffactor   = 1.F;
+    float maxEPR    = 0.F;   // Max EPR set on command line
 
     uint16_t cpPort = 18347;
     bool debug = false;
@@ -919,6 +944,7 @@ int main(int argc, char **argv) {
     bool writeToFile = false;
     bool writeToCsvFile = false;
     bool fixedFill = false;
+    bool usePidEpr = false;
 
     int range;
     uint16_t port = 17750;
@@ -968,7 +994,8 @@ int main(int argc, char **argv) {
     parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
               listeningAddr, authToken, fileName, csvFileName,
               &bufSize, &fifoCapacity, &fcount, &reportTime, &sampleTime, &processThds,
-              &debug, &useIPv6, cpAddr,  clientName, &Kp, &Ki, &Kd, &setFill, &ffactor);
+              &debug, &useIPv6, cpAddr,  clientName,
+              &Kp, &Ki, &Kd, &setFill, &ffactor, &maxEPR);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -990,6 +1017,11 @@ int main(int argc, char **argv) {
     // Change to floats for later computations
     fifoCapacityFlt = static_cast<float>(fifoCapacity);
     fcountFlt = static_cast<float>(fcount);
+
+    if (maxEPR > 0.) {
+        // Have pid controling on incoming-event-rate / max-EPR
+        usePidEpr = true;
+    }
 
     ///////////////////////////////////
     ///       output to file(s)     ///
@@ -1224,6 +1256,10 @@ int main(int argc, char **argv) {
     float prevFill, curFill, fillPercent;
     int fillIndex = 0;
 
+    // Find instantaneous incoming event rate like in the stats thread, only calculate every sample period
+    int64_t prevTotalEvents=0, currTotalEvents=0, eventCount;
+    float evRate, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
+
     // time stuff
     struct timespec t1, t2;
     int64_t time;
@@ -1232,6 +1268,7 @@ int main(int argc, char **argv) {
     prevAbsTime = 1000L*(t1.tv_sec) + (t1.tv_nsec)/1000000L;
 
     while (true) {
+
         // Delay between sampling fifo points
         std::this_thread::sleep_for(std::chrono::milliseconds(sampleTime));
 
@@ -1262,7 +1299,18 @@ int main(int argc, char **argv) {
         t1 = t2;
 
         // PID error
-        pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
+        if (usePidEpr) {
+            currTotalEvents = totalEvents;
+            eventCount = currTotalEvents - prevTotalEvents;
+            prevTotalEvents = currTotalEvents;
+            evRate = 1000000.0 * ((float) eventCount) / time;
+            relEvRate = evRate / maxEPR;
+
+            pidError = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd);
+        }
+        else {
+            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
+        }
 
         // Every "loopMax" loops
         if (--loopCount <= 0) {
@@ -1270,6 +1318,9 @@ int main(int argc, char **argv) {
             if (fixedFill) {
                 // test CP by fixing fill level and setting pid error to 0
                 client.update(setFill, 0);
+            }
+            else if (usePidEpr) {
+                client.update(relEvRate, pidError);
             }
             else {
                 client.update(fillPercent, pidError);
