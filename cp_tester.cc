@@ -864,10 +864,14 @@ static void *rateThread(void *arg) {
             if (currTotalPackets > 0) {
                 skipFirst = false;
             }
-            firstT = t1 = t2;
-            totalT = totalBytes = totalPackets = totalEvents = 0;
-            droppedBytes = droppedPackets = droppedEvents = 0;
-            continue;
+            else {
+                firstT = t1 = t2;
+                totalT = totalBytes = totalPackets = totalEvents = 0;
+                droppedBytes = droppedPackets = droppedEvents = 0;
+                discardedBuiltBytes = discardedBuiltEvts = discardedBuiltPkts = 0;
+//printf("Stats, reset totalEvent to 0 since data is not coming in\n");
+                continue;
+            }
         }
 
         // Use for instantaneous rates
@@ -888,6 +892,7 @@ static void *rateThread(void *arg) {
             totalT = totalBytes = totalPackets = totalEvents = 0;
             droppedBytes = droppedPackets = droppedEvents = 0;
             firstT = t1 = t2;
+//printf("Stats, reset totalEvent to 0 since byteCount or totalT rolled over\n");
             continue;
         }
 
@@ -1238,8 +1243,6 @@ int main(int argc, char **argv) {
     // To prevent this, keep a running average of the fill %, so its reported value is a more
     // accurate portrayal of what's really going on.
 
-    float deltaT; // time in millisec
-
     // Find # of loops (samples) to comprise one reporting period.
     // Command line enforces report time to be integer multiple of sampleTime.
     int loopMax   = reportTime / sampleTime; // report & sample time are both in millisec
@@ -1251,42 +1254,36 @@ int main(int argc, char **argv) {
     float runningFillTotal = 0., fillAvg;
     float fillValues[fcount];
     memset(fillValues, 0, fcount*sizeof(float));
-
     // Keep circulating thru array. Highest index is fcount - 1.
     float prevFill, curFill, fillPercent;
     int fillIndex = 0;
 
-    // Find instantaneous incoming event rate like in the stats thread, only calculate every sample period
-    int64_t prevTotalEvents=0, currTotalEvents=0, eventCount;
-    float evRate, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
+
+    // Alternatively keep a running avg of the incoming event rate normalized to max event processing rate
+    float runningEventTotal = 0., evCountAvg;
+    float evCountValues[fcount];
+    memset(evCountValues, 0, fcount*sizeof(float));
+    float prevEvCount, curEvCount, evCountPercent;
+    int evCountIndex = 0, earliestTimeIndex;
+    float evRateAvg, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
 
     // time stuff
     struct timespec t1, t2;
-    int64_t time;
+    int64_t totalTime, time;
+    int64_t times[fcount];
+    float deltaT; // "time" in millisec
     uint64_t absTime, prevAbsTime;
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    prevAbsTime = 1000L*(t1.tv_sec) + (t1.tv_nsec)/1000000L;
+    prevAbsTime = 1000000L*(t1.tv_sec) + (t1.tv_nsec)/1000L; // microsec epoch time
+    // Load times with current time for more accurate first round of rates
+    for (int i=0; i < fcount; i++) {
+        times[0] = prevAbsTime;
+    }
 
     while (true) {
 
         // Delay between sampling fifo points
         std::this_thread::sleep_for(std::chrono::milliseconds(sampleTime));
-
-        // Read current fifo level
-        curFill = sharedQ->size();
-        // Previous value at this index
-        prevFill = fillValues[fillIndex];
-        // Store current val at this index
-        fillValues[fillIndex] = curFill;
-        // Add current val and remove previous val at this index from the running total.
-        // That way we have added fcount number of most recent entries at ony one time.
-        runningFillTotal += curFill - prevFill;
-        // Find index for the next round
-        fillIndex++;
-        fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
-
-        fillAvg = runningFillTotal / fcountFlt;
-        fillPercent = fillAvg / fifoCapacityFlt;
 
         // Read time
         clock_gettime(CLOCK_MONOTONIC, &t2);
@@ -1294,21 +1291,58 @@ int main(int argc, char **argv) {
         time = (1000000L * (t2.tv_sec - t1.tv_sec)) + ((t2.tv_nsec - t1.tv_nsec)/1000L);
         // convert to sec
         deltaT = static_cast<float>(time)/1000000.F;
-        // Get the current epoch time in millisec
-        absTime = 1000L*t2.tv_sec + t2.tv_nsec/1000000L;
+        // Get the current epoch time in microsec
+        absTime = 1000000L*t2.tv_sec + t2.tv_nsec/1000L;
         t1 = t2;
+
 
         // PID error
         if (usePidEpr) {
-            currTotalEvents = totalEvents;
-            eventCount = currTotalEvents - prevTotalEvents;
-            prevTotalEvents = currTotalEvents;
-            evRate = 1000000.0 * ((float) eventCount) / time;
-            relEvRate = evRate / maxEPR;
+            // Error term is based on incoming-evt-rate/EPR.
 
-            pidError = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd);
+            // Keep a running total on # of events to arrive in fcount periods
+            curEvCount  = totalEvents;
+            prevEvCount = evCountValues[evCountIndex];
+            evCountValues[evCountIndex] = curEvCount;
+            runningEventTotal = curEvCount - prevEvCount;
+
+            // Keep count of total time taken for last fcount periods.
+            // Record current time.
+            times[evCountIndex] = absTime;
+            // Subtract that from earliest time to get the total time.
+            // Index of earliest time -->
+            earliestTimeIndex = ((evCountIndex + 1) == fcount) ? 0 : (evCountIndex + 1);
+            totalTime = absTime - times[earliestTimeIndex];
+//fprintf(fp, "totalE = %" PRId64 ", runningTot = %.0f, index %d, cur %.0f, prev %.0F\n",
+//        totalEvents, runningEventTotal, evCountIndex, curEvCount, prevEvCount);
+
+            // Set index for next round
+            evCountIndex++;
+            evCountIndex = (evCountIndex == fcount) ? 0 : evCountIndex;
+
+            // Calculate avg rate over fcount periods and also do the normalization
+            evRateAvg  = 1000000.0 * runningEventTotal / totalTime;
+            relEvRate  = evRateAvg / maxEPR;
+            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd);
         }
         else {
+            // Error term based on fifo level.
+
+            // Read current fifo level
+            curFill = sharedQ->size();
+            // Previous value at this index
+            prevFill = fillValues[fillIndex];
+            // Store current val at this index
+            fillValues[fillIndex] = curFill;
+            // Add current val and remove previous val at this index from the running total.
+            // That way we have added fcount number of most recent entries at ony one time.
+            runningFillTotal += curFill - prevFill;
+            // Find index for the next round
+            fillIndex++;
+            fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
+
+            fillAvg = runningFillTotal / fcountFlt;
+            fillPercent = fillAvg / fifoCapacityFlt;
             pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
         }
 
@@ -1338,16 +1372,30 @@ int main(int argc, char **argv) {
                 std::time_t now_c = std::chrono::system_clock::to_time_t(now);
                 char timestamp[20];
                 strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now_c));
-                fprintf(
-                        csvFp,
-                        "%s,%f,%f,%f,%d,%d\n",
-                        timestamp,
-                        fillPercent,
-                        fillAvg,
-                        pidError,
-                        (int)eventsProcessed,
-                        (int)eventsReassembled
-                );
+                if (usePidEpr) {
+                    fprintf(
+                            csvFp,
+                            "%s,%f,%f,%f,%d,%d\n",
+                            timestamp,
+                            relEvRate,
+                            evRateAvg,
+                            pidError,
+                            (int) eventsProcessed,
+                            (int) eventsReassembled
+                    );
+                }
+                else {
+                    fprintf(
+                            csvFp,
+                            "%s,%f,%f,%f,%d,%d\n",
+                            timestamp,
+                            fillPercent,
+                            fillAvg,
+                            pidError,
+                            (int) eventsProcessed,
+                            (int) eventsReassembled
+                    );
+                }
                 fflush(csvFp);
             }
 
@@ -1356,10 +1404,16 @@ int main(int argc, char **argv) {
         }
 
         // Print out every 4 seconds
-        if (absTime - prevAbsTime >= 4000) {
+        if (absTime - prevAbsTime >= 4000000) {
             prevAbsTime = absTime;
-            fprintf(fp, "     Fifo level %d  Avg:  %.2f,  %.2f%%,  pid err %f\n\n",
-                   ((int)curFill), fillAvg, (100.F*fillPercent), pidError);
+            if (usePidEpr) {
+                fprintf(fp, "     Rel ev rate = %.3f,  Avg input ev rate = %.2f Hz,  pid err %f\n\n",
+                        relEvRate, evRateAvg, pidError);
+            }
+            else {
+                fprintf(fp, "     Fifo level %d  Avg:  %.2f,  %.2f%%,  pid err %f\n\n",
+                        ((int) curFill), fillAvg, (100.F * fillPercent), pidError);
+            }
             fflush(fp);
         }
     }
