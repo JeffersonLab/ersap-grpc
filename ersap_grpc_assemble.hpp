@@ -174,7 +174,10 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
                 return true;
             }
 
-            size_t size() {return content.size();}
+            size_t size() {
+                std::unique_lock<std::mutex> lk(mutex);
+                return content.size();
+            }
 
         };
 
