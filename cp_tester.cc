@@ -936,7 +936,6 @@ int main(int argc, char **argv) {
     int cores[10];
 
     float setFill   = -1.0F;
-    float pidError  = 0.F;
     float setPoint  = 0.F;   // set fifo to 1/2 full by default
     float ffactor   = 1.F;
     float maxEPR    = 0.F;   // Max EPR set on command line
@@ -1246,6 +1245,7 @@ int main(int argc, char **argv) {
     // Command line enforces report time to be integer multiple of sampleTime.
     int loopMax   = 1000 * reportTime / sampleTime; // report in millisec, sample in microsec
     int loopCount = loopMax;    // use to track # loops made
+    float pidError = 0.F, prevPidError = 0.F;
 
     fprintf(fp, "reportTime = %u msec, sampleTime = %u microsec, loopMax = %d, loopCount = %d\n", reportTime, sampleTime, loopMax, loopCount);
 
@@ -1260,13 +1260,10 @@ int main(int argc, char **argv) {
 
     // Alternatively keep a running avg of the incoming event rate normalized to max event processing rate
     int64_t runningEventTotal = 0;
-    float /*runningEventTotal = 0.,*/ evCountAvg;
-//    float evCountValues[fcount];
-//    memset(evCountValues, 0, fcount*sizeof(float));
+    float evCountAvg;
     int64_t evCountValues[fcount];
     memset(evCountValues, 0, fcount*sizeof(int64_t));
     int64_t prevEvCount, curEvCount, evCountPercent;
-    //float prevEvCount, curEvCount, evCountPercent;
     // set first and last index right here
     int evCountIndex = 0, earliestTimeIndex = 1;
     float evRateAvg, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
@@ -1389,11 +1386,14 @@ int main(int argc, char **argv) {
                 client.update(setFill, 0);
             }
             else if (usePidEpr) {
-                client.update(relEvRate, pidError);
+                client.update(relEvRate, prevPidError);
             }
             else {
-                client.update(fillPercent, pidError);
+                client.update(fillPercent, prevPidError);
             }
+
+            // Use the previous pid value when reporting
+            prevPidError = pidError;
 
             // Send to server
             err = client.SendState();
