@@ -60,15 +60,16 @@ X pid(          // Proportional, Integrative, Derivative Controller
         const X& delta_t,  // Time delta between determination of last control value
         const X& Kp,       // Konstant for Proprtional Control
         const X& Ki,       // Konstant for Integrative Control
-        const X& Kd        // Konstant for Derivative Control
+        const X& Kd,       // Konstant for Derivative Control
+        const X& previous_error // previous error from 1 second ago
 )
 {
-    static X previous_error = 0; // for Derivative
+    //static X previous_error = 0; // for Derivative (now given as arg)
     static X integral_acc = 0;   // For Integral (Accumulated Error)
     X error = setPoint - prcsVal;
     integral_acc += error * delta_t;
     X derivative = (error - previous_error) / delta_t;
-    previous_error = error;
+    //previous_error = error;
     return Kp * error + Ki * integral_acc + Kd * derivative;  // control output
 }
 
@@ -1245,7 +1246,11 @@ int main(int argc, char **argv) {
     // Command line enforces report time to be integer multiple of sampleTime.
     int loopMax   = 1000 * reportTime / sampleTime; // report in millisec, sample in microsec
     int loopCount = loopMax;    // use to track # loops made
-    float pidError = 0.F, prevPidError = 0.F;
+    float pidError = 0.F;
+    // Keep fcount sample times worth (1 sec) of errors so we can use error from 1 sec ago
+    // for PID derivative term. For now, fill w/ 0's.
+    float oldestPidError, oldPidErrors[fcount];
+    memset(oldPidErrors, 0, fcount*sizeof(float));
 
     fprintf(fp, "reportTime = %u msec, sampleTime = %u microsec, loopMax = %d, loopCount = %d\n", reportTime, sampleTime, loopMax, loopCount);
 
@@ -1255,7 +1260,6 @@ int main(int argc, char **argv) {
     memset(fillValues, 0, fcount*sizeof(float));
     // Keep circulating thru array. Highest index is fcount - 1.
     float prevFill, curFill, fillPercent;
-    int fillIndex = 0;
 
 
     // Alternatively keep a running avg of the incoming event rate normalized to max event processing rate
@@ -1264,8 +1268,8 @@ int main(int argc, char **argv) {
     int64_t evCountValues[fcount];
     memset(evCountValues, 0, fcount*sizeof(int64_t));
     int64_t prevEvCount, curEvCount, evCountPercent;
-    // set first and last index right here
-    int evCountIndex = 0, earliestTimeIndex = 1;
+    // set first and last indexes right here
+    int currentIndex = 0, earliestIndex = 1;
     float evRateAvg, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
 
     // time stuff
@@ -1306,29 +1310,34 @@ int main(int argc, char **argv) {
 
             // Keep a running total on # of events to arrive in fcount periods
             curEvCount  = totalEvents;
-            prevEvCount = evCountValues[evCountIndex];
-            evCountValues[evCountIndex] = curEvCount;
+            prevEvCount = evCountValues[currentIndex];
+            evCountValues[currentIndex] = curEvCount;
             runningEventTotal = curEvCount - prevEvCount;
 
             // Keep count of total time taken for last fcount periods.
             // Record current time.
-            times[evCountIndex] = absTime;
-            // Subtract that from earliest time to get the total time in microsec
-            totalTime = absTime - times[earliestTimeIndex];
-
-            // Set index for next round
-            earliestTimeIndex++;
-            earliestTimeIndex = (earliestTimeIndex == fcount) ? 0 : earliestTimeIndex;
-
-            evCountIndex++;
-            evCountIndex = (evCountIndex == fcount) ? 0 : evCountIndex;
+            times[currentIndex] = absTime;
+            // Subtract from that the earliest time to get the total time in microsec
+            totalTime = absTime - times[earliestIndex];
+            // Get oldest (1 sec) pid error for calculating PID derivative term
+            oldestPidError = oldPidErrors[earliestIndex];
 
             // Calculate avg rate over fcount periods and also do the normalization
             evRateAvg  = 1000000.0 * runningEventTotal / totalTime;
             relEvRate  = evRateAvg / maxEPR;
-            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd);
+            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd, oldestPidError);
 
-            if (evCountIndex == 0) {
+            // Track pid error
+            oldPidErrors[currentIndex] = pidError;
+
+            // Set indexes for next round
+            earliestIndex++;
+            earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
+
+            currentIndex++;
+            currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
+
+            if (currentIndex == 0) {
                 // Use totalTime to adjust the effective sampleTime so that we really do sample
                 // at the desired rate set on command line. This accounts for all the computations
                 // that this code does which slows down the actual sample rate.
@@ -1343,9 +1352,9 @@ int main(int argc, char **argv) {
             // Read current fifo level
             curFill = sharedQ->size();
             // Previous value at this index
-            prevFill = fillValues[fillIndex];
+            prevFill = fillValues[currentIndex];
             // Store current val at this index
-            fillValues[fillIndex] = curFill;
+            fillValues[currentIndex] = curFill;
             // Add current val and remove previous val at this index from the running total.
             // That way we have added fcount number of most recent entries at ony one time.
             runningFillTotal += curFill - prevFill;
@@ -1360,15 +1369,25 @@ int main(int argc, char **argv) {
                 fprintf(fp, "\nNEG runningFillTotal (%f), set to 0!!\n\n", runningFillTotal);
             }
 
-            // Find index for the next round
-            fillIndex++;
-            fillIndex = (fillIndex == fcount) ? 0 : fillIndex;
+            // Get oldest (1 sec) pid error for calculating PID derivative term
+            oldestPidError = oldPidErrors[earliestIndex];
 
             fillAvg = runningFillTotal / fcountFlt;
             fillPercent = fillAvg / fifoCapacityFlt;
-            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd);
+            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd, oldestPidError);
 
-            if (fillIndex == 0) {
+            // Track pid error
+            oldPidErrors[currentIndex] = pidError;
+
+            // Set indexes for next round
+            earliestIndex++;
+            earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
+
+            // Find index for the next round
+            currentIndex++;
+            currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
+
+            if (currentIndex == 0) {
                 float totalTime = absTime - prevFifoTime;
                 prevFifoTime = absTime;
 
@@ -1378,6 +1397,8 @@ int main(int argc, char **argv) {
             }
         }
 
+
+
         // Every "loopMax" loops
         if (--loopCount <= 0) {
             // Update the changing variables
@@ -1386,14 +1407,11 @@ int main(int argc, char **argv) {
                 client.update(setFill, 0);
             }
             else if (usePidEpr) {
-                client.update(relEvRate, prevPidError);
+                client.update(relEvRate, pidError);
             }
             else {
-                client.update(fillPercent, prevPidError);
+                client.update(fillPercent, pidError);
             }
-
-            // Use the previous pid value when reporting
-            prevPidError = pidError;
 
             // Send to server
             err = client.SendState();
