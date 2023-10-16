@@ -54,22 +54,22 @@
 
 
 template<class X>
-X pid(          // Proportional, Integrative, Derivative Controller
-        const X& setPoint, // Desired Operational Set Point
-        const X& prcsVal,  // Measure Process Value
-        const X& delta_t,  // Time delta between determination of last control value
-        const X& Kp,       // Konstant for Proprtional Control
-        const X& Ki,       // Konstant for Integrative Control
-        const X& Kd,       // Konstant for Derivative Control
-        const X& previous_error // previous error from 1 second ago
+X pid(                      // Proportional, Integrative, Derivative Controller
+        const X& setPoint,  // Desired Operational Set Point
+        const X& prcsVal,   // Measure Process Value
+        const X& delta_t,   // Time delta between determination of last control value
+        const X& Kp,        // Konstant for Proprtional Control
+        const X& Ki,        // Konstant for Integrative Control
+        const X& Kd,        // Konstant for Derivative Control
+        const X& prev_err,  // previous error
+        const X& prev_err_t // # of microseconds earlier that previous error was recorded
 )
 {
-    //static X previous_error = 0; // for Derivative (now given as arg)
     static X integral_acc = 0;   // For Integral (Accumulated Error)
     X error = setPoint - prcsVal;
     integral_acc += error * delta_t;
-    X derivative = (error - previous_error) / delta_t;
-    //previous_error = error;
+    //X derivative = (error - prev_err) / delta_t; // delta_t = 1 sec since this previous_error
+    X derivative = (error - prev_err) * 1000000. / prev_err_t;
     return Kp * error + Ki * integral_acc + Kd * derivative;  // control output
 }
 
@@ -1264,10 +1264,9 @@ int main(int argc, char **argv) {
 
     // Alternatively keep a running avg of the incoming event rate normalized to max event processing rate
     int64_t runningEventTotal = 0;
-    float evCountAvg;
     int64_t evCountValues[fcount];
     memset(evCountValues, 0, fcount*sizeof(int64_t));
-    int64_t prevEvCount, curEvCount, evCountPercent;
+    int64_t prevEvCount, curEvCount;
     // set first and last indexes right here
     int currentIndex = 0, earliestIndex = 1;
     float evRateAvg, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
@@ -1277,7 +1276,7 @@ int main(int argc, char **argv) {
     int64_t totalTime, time; // microsecs
     int64_t totalTimeGoal = sampleTime * fcount;
     int64_t times[fcount];
-    float deltaT; // "time" in millisecs
+    float deltaT; // "time" in secs
     int64_t absTime, prevAbsTime, prevFifoTime;
     clock_gettime(CLOCK_MONOTONIC, &t1);
     prevFifoTime = prevAbsTime = 1000000L*(t1.tv_sec) + (t1.tv_nsec)/1000L; // microsec epoch time
@@ -1325,7 +1324,7 @@ int main(int argc, char **argv) {
             // Calculate avg rate over fcount periods and also do the normalization
             evRateAvg  = 1000000.0 * runningEventTotal / totalTime;
             relEvRate  = evRateAvg / maxEPR;
-            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd, oldestPidError);
+            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd, oldestPidError, sampleTime*fcount);
 
             // Track pid error
             oldPidErrors[currentIndex] = pidError;
@@ -1367,6 +1366,7 @@ int main(int argc, char **argv) {
             // If this happens, set runningFillTotal to 0 as the best approximation.
             if (runningFillTotal < 0.) {
                 fprintf(fp, "\nNEG runningFillTotal (%f), set to 0!!\n\n", runningFillTotal);
+                runningFillTotal = 0.;
             }
 
             // Get oldest (1 sec) pid error for calculating PID derivative term
@@ -1374,7 +1374,7 @@ int main(int argc, char **argv) {
 
             fillAvg = runningFillTotal / fcountFlt;
             fillPercent = fillAvg / fifoCapacityFlt;
-            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd, oldestPidError);
+            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd, oldestPidError, sampleTime*fcount);
 
             // Track pid error
             oldPidErrors[currentIndex] = pidError;
