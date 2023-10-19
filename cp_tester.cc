@@ -70,6 +70,10 @@ X pid(                      // Proportional, Integrative, Derivative Controller
     integral_acc += error * delta_t;
     //X derivative = (error - prev_err) / delta_t; // delta_t = 1 sec since this previous_error
     X derivative = (error - prev_err) * 1000000. / prev_err_t;
+//    if (prev_err_t == 0 || prev_err_t != prev_err_t) {
+//        derivative = 0;
+//    }
+
     return Kp * error + Ki * integral_acc + Kd * derivative;  // control output
 }
 
@@ -1244,6 +1248,7 @@ int main(int argc, char **argv) {
 
     // Find # of loops (samples) to comprise one reporting period.
     // Command line enforces report time to be integer multiple of sampleTime.
+    int adjustedSampleTime = sampleTime;
     int loopMax   = 1000 * reportTime / sampleTime; // report in millisec, sample in microsec
     int loopCount = loopMax;    // use to track # loops made
     float pidError = 0.F;
@@ -1290,7 +1295,9 @@ int main(int argc, char **argv) {
 
         // Delay between sampling fifo points.
         // sampleTime is adjusted below to get close to the actual desired sampling rate.
-        std::this_thread::sleep_for(std::chrono::microseconds(sampleTime));
+        // Not sure how well this will work as minimum sleep time on linux is around
+        // 1 to 1/2 millisec. That means sampleTime >= 500.
+        std::this_thread::sleep_for(std::chrono::microseconds(adjustedSampleTime));
 
         // Read time
         clock_gettime(CLOCK_MONOTONIC, &t2);
@@ -1303,6 +1310,18 @@ int main(int argc, char **argv) {
         t1 = t2;
 
 
+        // Keep count of total time taken for last fcount periods.
+
+        // Record current time
+        times[currentIndex] = absTime;
+        // Subtract from that the earliest time to get the total time in microsec
+        totalTime = absTime - times[earliestIndex];
+        // Keep things from blowing up if we've goofed somewhere
+        if (totalTime < totalTimeGoal) totalTime = totalTimeGoal;
+        // Get oldest pid error for calculating PID derivative term
+        oldestPidError = oldPidErrors[earliestIndex];
+
+
         // PID error
         if (usePidEpr) {
             // Error term is based on incoming-evt-rate/EPR.
@@ -1313,37 +1332,10 @@ int main(int argc, char **argv) {
             evCountValues[currentIndex] = curEvCount;
             runningEventTotal = curEvCount - prevEvCount;
 
-            // Keep count of total time taken for last fcount periods.
-            // Record current time.
-            times[currentIndex] = absTime;
-            // Subtract from that the earliest time to get the total time in microsec
-            totalTime = absTime - times[earliestIndex];
-            // Get oldest (1 sec) pid error for calculating PID derivative term
-            oldestPidError = oldPidErrors[earliestIndex];
-
             // Calculate avg rate over fcount periods and also do the normalization
             evRateAvg  = 1000000.0 * runningEventTotal / totalTime;
             relEvRate  = evRateAvg / maxEPR;
-            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd, oldestPidError, sampleTime*fcount);
-
-            // Track pid error
-            oldPidErrors[currentIndex] = pidError;
-
-            // Set indexes for next round
-            earliestIndex++;
-            earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
-
-            currentIndex++;
-            currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
-
-            if (currentIndex == 0) {
-                // Use totalTime to adjust the effective sampleTime so that we really do sample
-                // at the desired rate set on command line. This accounts for all the computations
-                // that this code does which slows down the actual sample rate.
-                // Do this adjustment once every fcount samples.
-                float factr = (1. + (totalTimeGoal - totalTime) / (float) totalTime);
-                sampleTime = sampleTime * factr;
-            }
+            pidError   = pid<float>(setPoint, relEvRate, deltaT, Kp, Ki, Kd, oldestPidError, totalTime);
         }
         else {
             // Error term based on fifo level.
@@ -1369,34 +1361,39 @@ int main(int argc, char **argv) {
                 runningFillTotal = 0.;
             }
 
-            // Get oldest (1 sec) pid error for calculating PID derivative term
-            oldestPidError = oldPidErrors[earliestIndex];
-
             fillAvg = runningFillTotal / fcountFlt;
             fillPercent = fillAvg / fifoCapacityFlt;
-            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd, oldestPidError, sampleTime*fcount);
-
-            // Track pid error
-            oldPidErrors[currentIndex] = pidError;
-
-            // Set indexes for next round
-            earliestIndex++;
-            earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
-
-            // Find index for the next round
-            currentIndex++;
-            currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
-
-            if (currentIndex == 0) {
-                float totalTime = absTime - prevFifoTime;
-                prevFifoTime = absTime;
-
-                float factr = (1. + (totalTimeGoal - totalTime) / totalTime);
-                sampleTime = sampleTime * factr;
-                //fprintf(fp, "sampleTime = %d, totalT = %.0f\n", sampleTime, totalTime);
-            }
+            pidError = pid<float>(setPoint, fillPercent, deltaT, Kp, Ki, Kd, oldestPidError, totalTime);
         }
 
+
+        // Track pid error
+        oldPidErrors[currentIndex] = pidError;
+
+        // Set indexes for next round
+        earliestIndex++;
+        earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
+
+        currentIndex++;
+        currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
+
+        if (currentIndex == 0) {
+            // Use totalTime to adjust the effective sampleTime so that we really do sample
+            // at the desired rate set on command line. This accounts for all the computations
+            // that this code does which slows down the actual sample rate.
+            // Do this adjustment once every fcount samples.
+            float factr = totalTimeGoal/totalTime;
+            adjustedSampleTime = sampleTime * factr;
+
+            // If totalTime, for some reason, is really big, we don't want the adjusted time to be 0
+            // since a sleep_for(0) is very short. However, sleep_for(1) is pretty much the same as
+            // sleep_for(500).
+            if (adjustedSampleTime == 0) {
+                adjustedSampleTime = 500;
+            }
+
+            //fprintf(fp, "sampleTime = %d, totalT = %.0f\n", adjustedSampleTime, totalTime);
+        }
 
 
         // Every "loopMax" loops
