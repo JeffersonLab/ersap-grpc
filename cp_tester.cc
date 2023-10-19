@@ -124,9 +124,9 @@ static void printHelp(char *programName) {
             "        [-pid <set max EPR in Hz (min 1) and have PID control on relative incoming rate>]",
             "        [-fill <set reported fifo fill %, 0-1 (and pid error to 0) for testing>]\n",
 
-            "        [-Kp <proportional gain (0.5 default)>]",
-            "        [-Ki <integral gain (0. default)>]",
-            "        [-Kd <derivative gain (0. default)>]",
+            "        [-Kp <proportional gain (0.52 default)>]",
+            "        [-Ki <integral gain (0.005 default)>]",
+            "        [-Kd <derivative gain (0.0 default)>]",
             "        [-csv <path (stdout default)>]");
 
     fprintf(stderr, "        This is a gRPC program that simulates an ERSAP backend by sending messages to a control plane.\n");
@@ -960,9 +960,9 @@ int main(int argc, char **argv) {
     float    fifoCapacityFlt;
 
     // PID loop variables
-    float Kp = 0.8;
-    float Ki = 0.02;
-    float Kd = 0.00;
+    float Kp = 0.52;
+    float Ki = 0.005;
+    float Kd = 0.000;
 
     // # of fill values to average when reporting to grpc
     uint32_t fcount = 1000;
