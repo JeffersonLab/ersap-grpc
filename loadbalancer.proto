@@ -1,5 +1,5 @@
 //
-// Copyright 2023, Jefferson Science Associates, LLC.
+// Copyright 2024, Jefferson Science Associates, LLC.
 // Subject to the terms in the LICENSE file found in the top-level directory.
 //
 // EPSCI Group
@@ -32,57 +32,125 @@ enum PortRange {
 
 // The backend state reporting service definition.
 service LoadBalancer {
-	// Sends a backend's registration request to server
+	// Sends, to the CP, a backend's request to use a specified LB when connecting and
+	// the reply contains LB info
+	rpc ReserveLoadBalancer (ReserveLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
+	// Retrieves the status of the LB
+	rpc LoadBalancerStatus (LoadBalancerStatusRequest) returns (LoadBalancerStatusReply) {};
+	// Sends, to the CP, a backend's request to be released from using the LB
+	rpc FreeLoadBalancer (FreeLoadBalancerRequest) returns (FreeLoadBalancerReply) {};
+
+	// Sends a backend's registration request to CP
 	rpc Register (RegisterRequest) returns (RegisterReply) {};
-	// Sends a backend's request to unregister to server
+	// Sends a backend's request to unregister to CP
 	rpc Deregister (DeregisterRequest) returns (DeregisterReply) {};
-	// Sends a backend's state to server
+	// Sends a backend's state to CP
 	rpc SendState (SendStateRequest) returns (SendStateReply) {};
 }
+
+
+//
+//  ReserveLoadBalancer
+//
+message ReserveLoadBalancerRequest {
+	string token = 1; // admin token
+	string name = 2;  // name of the new LB instance
+	google.protobuf.Timestamp until = 4; // when this reservation should end
+}
+// Reply with instance token
+message ReserveLoadBalancerReply {
+	string token = 1;           // LB instance token
+	string lbId = 2;            // LB instance identifier
+	string syncIpAddress = 3;   // CP sync data receiving IPv4 address
+	uint32 syncUdpPort = 4;     // CP sync data receiving port
+	string dataIpv4Address = 5; // LB data receiving IPv4 address
+	string dataIpv6Address = 6; // LB data receiving IPv6 address
+}
+
+
+//
+//  LoadBalancerStatus
+//
+message LoadBalancerStatusRequest {
+	string token = 1; // admin token or instance token
+	string lbId = 2;  // LB instance identifier
+}
+message WorkerStatus {
+	string name = 1;
+	float fillPercent = 2;
+	float controlSignal = 3;
+	uint32 slotsAssigned = 4;
+	google.protobuf.Timestamp lastUpdated = 5; // time that this node was last updated
+}
+message LoadBalancerStatusReply {
+	google.protobuf.Timestamp timestamp = 1; // time that this message was generated
+	uint64 currentEpoch = 2; // current epoch
+	uint64 currentPredictedEventNumber = 3; // Current predicted event number
+	repeated WorkerStatus workers = 4;
+}
+
+
+
+//
+// FreeLoadBalancer
+//
+message FreeLoadBalancerRequest {
+	string token = 1; // admin token or instance token
+	string lbId = 2;  // LB instance identifier
+}
+message FreeLoadBalancerReply {
+
+}
+
+
 
 //
 // Register
 //
-// The message being sent to server when backend is registering
 message RegisterRequest {
-	string authToken = 1; // authentication token
-	string name = 2; // name of backend
-	uint32 cpus = 3; // # of cores on backend
-	uint64 ramBytes = 4; // total RAM on backend in bytes
-	uint64 bufCount = 5; // max number of backend's buffers or fifo entries
-	uint64 bufSizeBytes = 6; // max size in bytes of each buffer or fifo entry
-	float  setPointPercent = 7; // PID set point in units of % fifo-entries/RAM that are filled with unprocessed data
-	string dPlaneTargetIP = 8; // backend data receiving IP address
-	uint32 dPlaneTargetPort = 9; // backend data receiving UDP port
-	PortRange dPlaneTargetPortRange = 10; // backend "entropy" or range of ports
+	string token = 1;        // instance token or admin token
+	string lbId = 2;         // LB instance identifier
+	string name = 3;         // name of backend
+	float  weight = 4;       // normalized relative weight of the node for initial LB calendar (0 to 1)
+	string ipAddress = 5;    // backend data receiving IPv4 address
+	uint32 udpPort = 6;      // backend data receiving UDP port
+	PortRange portRange = 7; // backend "entropy" or range of ports
 }
 // Reply with session token
 message RegisterReply {
-	string sessionToken = 1; // Token to use as sessionToken in subsequent requests
+	string token = 1;     // Token to use as sessionToken in subsequent requests
+	string sessionId = 2; // Session identifier to use in subsequent requests
 }
+
+
 
 //
 // Deregister
 //
 // The message being sent to server when backend is deregistering
 message DeregisterRequest {
-	string sessionToken = 1; // session token from RegisterReply
+	string token = 1;     // session token from RegisterReply
+	string lbId = 2;      // LB instance identifier
+	string sessionId = 3; // session id from RegisterReply
 }
 // DeregisterReply is intentionally blank (in case more data needed in future)
 message DeregisterReply {
 
 }
 
+
+
 //
 // SendState
 //
-// The message being sent to server containing backend's current state
 message SendStateRequest {
-	string sessionToken = 1; // session token from RegisterReply
-	google.protobuf.Timestamp timestamp = 2; // local time when backend state determined (millisec since Epoch, 1970-01-01)
-	float fillPercent = 3; // % of fifo entries that are filled with unprocessed data (0 to 1)
-	float pidError = 4; // PID loop error term in % of fifo entries (-.5 to +.5)
-	bool isReady = 5; // If true, ready to accept more data, else not ready
+	string token = 1;     // session token, instance token, or admin token
+	string sessionId = 2; // session id to update
+	string lbId = 3;      // LB instance identifier
+	google.protobuf.Timestamp timestamp = 4; // local time when backend state determined (millisec since Epoch, 1970-01-01)
+	float fillPercent = 5;   // normalized level of fifo entries that are filled with unprocessed data (0 to 1)
+	float controlSignal = 6; // change to data rate
+	bool isReady = 7;        // If true, ready to accept more data, else not ready
 }
 // SendStateReply is intentionally blank (in case more data needed in future)
 message SendStateReply {

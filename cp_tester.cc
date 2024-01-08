@@ -14,7 +14,7 @@
 
 /**
  * @file
- * Send simulated requests/data to the cp_server program (or real CP).
+ * Send simulated requests/data to the CP.
  * Behaves like an ERSAP backend.
  */
 
@@ -98,18 +98,20 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
             "        [-a <data receiving address (for registration)>]",
             "        [-range <data receiving port range (for registration), default 0>]",
-            "        [-token <authentication token (for registration, default = udplbd_default_change_me)>]",
+            "        [-token <administrative token (for registration, default = udplbd_default_change_me)>]",
             "        [-file <fileName to hold output>]\n",
 
             "        [-cp_addr <control plane IP address (default ejfat-2)>]",
             "        [-cp_port <control plane grpc port (default 18347)>]",
             "        [-name <backend name>]\n",
+            "        [-w <weight relative to other backends (default 1.)>]\n",
+            "        [-lbid <id of LB to use (default LB_0)>]\n",
 
             "        [-count <# of fill values averaged, default = 1000>]",
             "        [-rtime <millisec for reporting fill to CP, default 1000>]",
@@ -156,6 +158,7 @@ static void printHelp(char *programName) {
  * @param reportTime    filled with millisec between reports to CP.
  * @param sampleTime    filled with millisec between reports to CP.
  * @param processThds   filled with # of threads which pull reassembled events off of Q and "process".
+ * @param lbid          filled with ID of the LB to be used.
  * @param debug         filled with debug flag.
  * @param useIPv6       filled with use IP version 6 flag.
  * @param cpAddr        filled with grpc server (control plane) IP address to info to.
@@ -166,6 +169,7 @@ static void printHelp(char *programName) {
  * @param fill          filled with fixed value to report as fifo fill level (0-1).
  * @param ffactor       filled with fudge factor to multiply event processing time with.
  * @param maxEPR        filled with max event processing rate for node and have PID key on relative incoming ev rate.
+ * @param weight        filled with weight of this relative to other backends for the given LB.
  */
 static void parseArgs(int argc, char **argv,
                       int *cores, float *setPt, uint16_t *cpPort,
@@ -175,9 +179,10 @@ static void parseArgs(int argc, char **argv,
                       uint32_t *bufSize, uint32_t *fifoSize,
                       uint32_t *fillCount, int32_t *reportTime,
                       int32_t *sampleTime, uint32_t *processThds,
-                      bool *debug, bool *useIPv6, char *cpAddr, char *clientName,
+                      bool *debug, bool *useIPv6,
+                      char *cpAddr, char *clientName, char *lbid,
                       float *kp, float *ki, float *kd,
-                      float *fill, float *ffactor, float *maxEPR) {
+                      float *fill, float *ffactor, float *maxEPR, float *weight) {
 
     int c, i_tmp;
     bool help = false;
@@ -205,11 +210,12 @@ static void parseArgs(int argc, char **argv,
                           {"factor",   1, nullptr, 19},
                           {"stime",    1, nullptr, 20},
                           {"pid",      1, nullptr, 21},
+                          {"lbid",     1, nullptr, 22},
                           {0,         0, 0,    0}
             };
 
 
-    while ((c = getopt_long_only(argc, argv, "vhs:a:p:b:", long_options, 0)) != EOF) {
+    while ((c = getopt_long_only(argc, argv, "vhs:a:p:b:w:", long_options, 0)) != EOF) {
 
         if (c == -1)
             break;
@@ -237,6 +243,26 @@ static void parseArgs(int argc, char **argv,
                     printHelp(argv[0]);
                     exit(-1);
                 }
+                break;
+
+            case 'w':
+                // weight
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -w\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp < 1.F) {
+                    fprintf(stderr, "Values to -w must be >= 0\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *weight = sp;
                 break;
 
             case 'b':
@@ -579,6 +605,16 @@ static void parseArgs(int argc, char **argv,
                 }
 
                 *maxEPR = sp;
+                break;
+
+            case 22:
+                // Load Balancer ID
+                if (strlen(optarg) > 255 || strlen(optarg) < 1) {
+                    fprintf(stderr, "LB id cannot be blank or > 255 chars, %s\n\n", optarg);
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+                strcpy(lbid, optarg);
                 break;
 
             case 'v':
@@ -944,6 +980,7 @@ int main(int argc, char **argv) {
     float setPoint  = 0.F;   // set fifo to 1/2 full by default
     float ffactor   = 1.F;
     float maxEPR    = 0.F;   // Max EPR set on command line
+    float weight    = 1.F;   // Weight of this BE compared to others for given LB
 
     uint16_t cpPort = 18347;
     bool debug = false;
@@ -990,19 +1027,25 @@ int main(int argc, char **argv) {
     char csvFileName[128];
     memset(fileName, 0, 128);
 
-    char authToken[256];
-    memset(authToken, 0, 256);
-    strcpy(authToken, "udplbd_default_change_me");
+    char adminToken[256];
+    memset(adminToken, 0, 256);
+    strcpy(adminToken, "udplbd_default_change_me");
+
+    // ID of LB to be used
+    char lbid[256];
+    memset(lbid, 0, 256);
+    strcpy(lbid, "LB_0");
 
     for (int i=0; i < 10; i++) {
         cores[i] = -1;
     }
 
     parseArgs(argc, argv, cores, &setPoint, &cpPort, &port, &range,
-              listeningAddr, authToken, fileName, csvFileName,
-              &bufSize, &fifoCapacity, &fcount, &reportTime, &sampleTime, &processThds,
-              &debug, &useIPv6, cpAddr,  clientName,
-              &Kp, &Ki, &Kd, &setFill, &ffactor, &maxEPR);
+              listeningAddr, adminToken, fileName, csvFileName,
+              &bufSize, &fifoCapacity, &fcount, &reportTime,
+              &sampleTime, &processThds,
+              &debug, &useIPv6, cpAddr,  clientName, lbid,
+              &Kp, &Ki, &Kd, &setFill, &ffactor, &maxEPR, &weight);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -1214,14 +1257,14 @@ int main(int argc, char **argv) {
     /// Control Plane  Stuff ///
     ////////////////////////////
 
-    LoadBalancerServiceImpl service;
-    LoadBalancerServiceImpl *pGrpcService = &service;
+//    LoadBalancerServiceImpl service;
+//    LoadBalancerServiceImpl *pGrpcService = &service;
 
     // Create grpc client of control plane
     LbControlPlaneClient client(cpAddr, cpPort,
                                 listeningAddr, port, pRange,
-                                clientName, authToken,
-                                bufSize, fifoCapacity, setPoint);
+                                clientName, adminToken, lbid,
+                                weight, setPoint);
 
     // Register this client with the grpc server
     int32_t err = client.Register();
