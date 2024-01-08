@@ -11,6 +11,7 @@
  * @file
  * Simulate a load balancer's control plane by receiving gRPC messages from an ERSAP (simulated) backend --
  * packetBlasteeEtFifoClient.c, control_plane_tester.c, cp_tester.cc programs.
+ * This is no longer used as a real control plane exists plus it's out-of-date.
  */
 
 #include <memory>
