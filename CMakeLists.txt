@@ -140,7 +140,7 @@ target_link_libraries(ejfat_grpc
 set(GRPC_EXEC_FILES
         cp_tester.cc
         simSender.cc
-        cp_server.cc
+#        cp_server.cc
         )
 
 
