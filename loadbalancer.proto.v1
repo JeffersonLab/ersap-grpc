@@ -1,0 +1,90 @@
+//
+// Copyright 2023, Jefferson Science Associates, LLC.
+// Subject to the terms in the LICENSE file found in the top-level directory.
+//
+// EPSCI Group
+// Thomas Jefferson National Accelerator Facility
+// 12000, Jefferson Ave, Newport News, VA 23606
+// (757)-269-7100
+
+syntax = "proto3";
+package loadbalancer;
+option go_package = "github.com/esnet/udplbd/pkg/pb";
+import "google/protobuf/timestamp.proto";
+
+enum PortRange {
+    PORT_RANGE_1 = 0;
+    PORT_RANGE_2 = 1;
+    PORT_RANGE_4 = 2;
+    PORT_RANGE_8 = 3;
+    PORT_RANGE_16 = 4;
+    PORT_RANGE_32 = 5;
+    PORT_RANGE_64 = 6;
+    PORT_RANGE_128 = 7;
+    PORT_RANGE_256 = 8;
+    PORT_RANGE_512 = 9;
+    PORT_RANGE_1024 = 10;
+    PORT_RANGE_2048 = 11;
+    PORT_RANGE_4096 = 12;
+    PORT_RANGE_8192 = 13;
+    PORT_RANGE_16384 = 14;
+}
+
+// The backend state reporting service definition.
+service LoadBalancer {
+	// Sends a backend's registration request to server
+	rpc Register (RegisterRequest) returns (RegisterReply) {};
+	// Sends a backend's request to unregister to server
+	rpc Deregister (DeregisterRequest) returns (DeregisterReply) {};
+	// Sends a backend's state to server
+	rpc SendState (SendStateRequest) returns (SendStateReply) {};
+}
+
+//
+// Register
+//
+// The message being sent to server when backend is registering
+message RegisterRequest {
+	string authToken = 1; // authentication token
+	string name = 2; // name of backend
+	uint32 cpus = 3; // # of cores on backend
+	uint64 ramBytes = 4; // total RAM on backend in bytes
+	uint64 bufCount = 5; // max number of backend's buffers or fifo entries
+	uint64 bufSizeBytes = 6; // max size in bytes of each buffer or fifo entry
+	float  setPointPercent = 7; // PID set point in units of % fifo-entries/RAM that are filled with unprocessed data
+	string dPlaneTargetIP = 8; // backend data receiving IP address
+	uint32 dPlaneTargetPort = 9; // backend data receiving UDP port
+	PortRange dPlaneTargetPortRange = 10; // backend "entropy" or range of ports
+}
+// Reply with session token
+message RegisterReply {
+	string sessionToken = 1; // Token to use as sessionToken in subsequent requests
+}
+
+//
+// Deregister
+//
+// The message being sent to server when backend is deregistering
+message DeregisterRequest {
+	string sessionToken = 1; // session token from RegisterReply
+}
+// DeregisterReply is intentionally blank (in case more data needed in future)
+message DeregisterReply {
+
+}
+
+//
+// SendState
+//
+// The message being sent to server containing backend's current state
+message SendStateRequest {
+	string sessionToken = 1; // session token from RegisterReply
+	google.protobuf.Timestamp timestamp = 2; // local time when backend state determined (millisec since Epoch, 1970-01-01)
+	float fillPercent = 3; // % of fifo entries that are filled with unprocessed data (0 to 1)
+	float pidError = 4; // PID loop error term in % of fifo entries (-.5 to +.5)
+	bool isReady = 5; // If true, ready to accept more data, else not ready
+}
+// SendStateReply is intentionally blank (in case more data needed in future)
+message SendStateReply {
+
+}
