@@ -71,6 +71,12 @@ using grpc::CompletionQueue;
 using grpc::ServerAsyncResponseWriter;
 
 using loadbalancer::PortRange;
+using loadbalancer::FreeLoadBalancerRequest;
+using loadbalancer::FreeLoadBalancerReply;
+using loadbalancer::ReserveLoadBalancerRequest;
+using loadbalancer::ReserveLoadBalancerReply;
+using loadbalancer::LoadBalancerStatusRequest;
+using loadbalancer::LoadBalancerStatusReply;
 using loadbalancer::LoadBalancer;
 using loadbalancer::RegisterRequest;
 using loadbalancer::DeregisterRequest;
@@ -178,6 +184,26 @@ class BackEnd {
 
 
 
+/** Class used to keep status data for a single client/backend. */
+class LbClientStatus {
+
+  public:
+
+    std::string name;
+    float fillPercent      = 0.;
+    float controlSignal    = 0.;
+    uint32_t slotsAssigned = 0;
+
+    /** Time this client's stats were last updated. */
+    google::protobuf::Timestamp lastUpdated;
+
+    /** Time in milliseconds past epoch that this data was updated.
+     *  Same as "lastUpdated" but in different format. */
+    int64_t updateTime;
+};
+
+
+
 /** Class used to send data from backend (client) to control plane (server). */
 class LbControlPlaneClient {
     
@@ -189,7 +215,11 @@ class LbControlPlaneClient {
                              const std::string& _name, const std::string& _token,
                              const std::string& lbId,
                              float _weight, float _setPoint);
-        
+
+        int ReserveLoadBalancer();
+        int FreeLoadBalancer() const;
+        int LoadBalancerStatus();
+
       	int Register();
       	int Deregister() const;
         int SendState()  const;
@@ -215,58 +245,89 @@ class LbControlPlaneClient {
 
   
     private:
-  
-        /** Object used to call backend's grpc API routines. */
-        std::unique_ptr<LoadBalancer::Stub> stub_;
 
-        // Used to connect to control plane
-        
-        /** Control plane's IP address (dotted decimal format). */
-        std::string cpAddr = "localhost";
-         /** Control plane's grpc port. */
-        uint16_t cpPort = 56789;
-        /** CP's target name (cpAddr:cpPort). */
-        std::string cpTarget;
+    /** Object used to call backend's grpc API routines. */
+    std::unique_ptr<LoadBalancer::Stub> stub_;
 
-        /** Token used to register. */
-        std::string adminToken;
+    // Used to reserve control plane
 
+    /** LB's name. */
+    std::string lbName;
 
-        // Reply from registration request
+    /** Time in seconds to reserve the LB. */
+    int64_t reservedSec = 60;
 
-        /** Token used to send state and to deregister. */
-        std::string sessionToken;
-        /** Id used to send state and to deregister. */
-        std::string sessionId;
-        /** LB's id. */
-        std::string lbId;
+    /** Token back from CP. */
+    std::string instanceToken;
 
-        /** Client/caller's name. */
-        std::string name;
+    /** CP sync data receiving IPv4 address. */
+    std::string syncIpAddress;
+
+    /** CP sync data receiving port. */
+    uint16_t syncUdpPort;
+
+    /** LB data receiving IPv4 address. */
+    std::string dataIpv4Address;
+
+    /** LB data receiving IPv6 address. */
+    std::string dataIpv6Address;
 
 
+    // Used to keep stats on LB clients. Key is name, Va
+    std::unordered_map<std::string, LbClientStatus> clientStats;
 
-        /** PID loop set point. */
-        float setPointPercent;
 
-        /** Backend's weight in CP relative to the weight of other backends in this LB's schedule density. */
-        float weight;
 
-        /** This backend client's data-receiving IP addr. */
-        std::string beAddr;
-        /** This backend client's data-receiving port. */
-        uint16_t bePort;
-        /** This backend client's data-receiving port range. */
-        PortRange beRange;
+    // Used to connect to control plane
 
-        // Transient data to send to control plane
+    /** Control plane's IP address (dotted decimal format). */
+    std::string cpAddr = "localhost";
+    /** Control plane's grpc port. */
+    uint16_t cpPort = 56789;
+    /** CP's target name (cpAddr:cpPort). */
+    std::string cpTarget;
 
-        /** Percent of fifo entries filled with unprocessed data. */
-        float fillPercent;
-        /** PID error term in percentage of backend's fifo entries. */
-        float pidError;
-        /** Ready to receive more data or not. */
-        bool isReady;
+    /** Token used to register. */
+    std::string adminToken;
+
+
+    // Reply from registration request
+
+    /** Token used to send state and to deregister. */
+    std::string sessionToken;
+    /** Id used to send state and to deregister. */
+    std::string sessionId;
+    /** LB's id. */
+    std::string lbId;
+
+
+    /** Client/backend/caller's name. */
+    std::string name;
+
+
+
+    /** PID loop set point. */
+    float setPointPercent;
+
+    /** Backend's weight in CP relative to the weight of other backends in this LB's schedule density. */
+    float weight;
+
+    /** This backend client's data-receiving IP addr. */
+    std::string beAddr;
+    /** This backend client's data-receiving port. */
+    uint16_t bePort;
+    /** This backend client's data-receiving port range. */
+    PortRange beRange;
+
+
+    // Transient data to send to control plane
+
+    /** Percent of fifo entries filled with unprocessed data. */
+    float fillPercent;
+    /** PID error term in percentage of backend's fifo entries. */
+    float pidError;
+    /** Ready to receive more data or not. */
+    bool isReady;
 
 };
 
