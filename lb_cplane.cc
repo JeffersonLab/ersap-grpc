@@ -412,7 +412,11 @@ using namespace std::chrono;
 
             request.set_fillpercent(fillPercent);
             request.set_controlsignal(pidError);
-            request.set_isready(isReady);
+
+            // In order NOT to throw the CP into unstable behavior,
+            // always say the we are ready to receive data.
+            //request.set_isready(isReady);
+            request.set_isready(true);
 
 		    // Container for the data we expect from the server.
 		    SendStateReply reply;
