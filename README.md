@@ -1,5 +1,12 @@
 # gRPC C++ ERSAP's EJFAT Backend
 
+### Version
+
+This is software that works with the original dynamic control plane.
+It is now in a new "version-1" branch. It contains the update which
+has the backend always reporting to the CP that it is ready
+to accept data.
+
 ### Library
 
 The **ejfat_grpc** library is comprised of **lb_cplane.cc** and **lb_cplane.h** .

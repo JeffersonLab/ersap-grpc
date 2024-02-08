@@ -468,7 +468,7 @@ std::cout << "De-registered client token " << request->sessiontoken() << std::en
 
             request.set_fillpercent(fillPercent);
             request.set_piderror(pidError);
-            request.set_isready(isReady);
+            request.set_isready(true);
 
 		    // Container for the data we expect from the server.
 		    SendStateReply reply;
