@@ -1,4 +1,4 @@
-# gRPC C++ ERSAP's EJFAT Backend
+# gRPC C++, EJFAT's Backend
 
 ### Library
 
