@@ -112,7 +112,6 @@ set(HEADER_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/ersap_grpc_packetize.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ersap_grpc_assemble.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/lb_cplane.h"
         ${hw_proto_hdrs} ${hw_grpc_hdrs}
         )
 
