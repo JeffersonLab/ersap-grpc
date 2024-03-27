@@ -32,12 +32,14 @@ enum PortRange {
 
 // The backend state reporting service definition.
 service LoadBalancer {
-	// Sends, to the CP, a backend's request to use a specified LB when connecting and
-	// the reply contains LB info
+	// Reserves a new LB. Sends, to the CP, a request to use a specified LB when connecting and
+	// the reply contains the LB info
 	rpc ReserveLoadBalancer (ReserveLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
-	// Retrieves the status of the LB
+	// Retrieves the reservation details of an LB
+	rpc GetLoadBalancer (GetLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
+	// Retrieves the status of an LB
 	rpc LoadBalancerStatus (LoadBalancerStatusRequest) returns (LoadBalancerStatusReply) {};
-	// Sends, to the CP, a backend's request to be released from using the LB
+	// Sends, to the CP, a request to be released from using the LB
 	rpc FreeLoadBalancer (FreeLoadBalancerRequest) returns (FreeLoadBalancerReply) {};
 
 	// Sends a backend's registration request to CP
@@ -57,6 +59,15 @@ message ReserveLoadBalancerRequest {
 	string name = 2;  // name of the new LB instance
 	google.protobuf.Timestamp until = 4; // when this reservation should end
 }
+
+//
+//  GetLoadBalancer will return same as ReserveLoadBalancer but without token
+//
+message GetLoadBalancerRequest {
+	string token = 1; // admin token
+	string lbId = 2;  // LB instance identifier
+}
+
 // Reply with instance token
 message ReserveLoadBalancerReply {
 	string token = 1;           // LB instance token

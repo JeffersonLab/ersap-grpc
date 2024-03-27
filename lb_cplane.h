@@ -184,25 +184,6 @@ class BackEnd {
 
 
 
-/** Class used to keep status data for a single client/backend. */
-class LbClientStatus {
-
-  public:
-
-    std::string name;
-    float fillPercent      = 0.;
-    float controlSignal    = 0.;
-    uint32_t slotsAssigned = 0;
-
-    /** Time this client's stats were last updated. */
-    google::protobuf::Timestamp lastUpdated;
-
-    /** Time in milliseconds past epoch that this data was updated.
-     *  Same as "lastUpdated" but in different format. */
-    int64_t updateTime;
-};
-
-
 
 /** Class used to send data from backend (client) to control plane (server). */
 class LbControlPlaneClient {
@@ -215,10 +196,6 @@ class LbControlPlaneClient {
                              const std::string& _name, const std::string& _token,
                              const std::string& lbId,
                              float _weight, float _setPoint);
-
-        int ReserveLoadBalancer();
-        int FreeLoadBalancer() const;
-        int LoadBalancerStatus();
 
       	int Register();
       	int Deregister() const;
@@ -271,10 +248,6 @@ class LbControlPlaneClient {
 
     /** LB data receiving IPv6 address. */
     std::string dataIpv6Address;
-
-
-    // Used to keep stats on LB clients. Key is name, Va
-    std::unordered_map<std::string, LbClientStatus> clientStats;
 
 
 
@@ -330,5 +303,114 @@ class LbControlPlaneClient {
     bool isReady;
 
 };
+
+
+
+
+/** Class used to keep status data for a single client/backend. */
+class LbClientStatus {
+
+public:
+
+    std::string name;
+    float fillPercent      = 0.;
+    float controlSignal    = 0.;
+    uint32_t slotsAssigned = 0;
+
+    /** Time this client's stats were last updated. */
+    google::protobuf::Timestamp lastUpdated;
+
+    /** Time in milliseconds past epoch that this data was updated.
+     *  Same as "lastUpdated" but in different format. */
+    int64_t updateTime;
+};
+
+
+
+
+/** Class used to reserve/free a load balancer. */
+class LbReservation {
+
+public:
+
+    LbReservation(const std::string& cpIP, uint16_t cpPort,
+                  const std::string& _name, const std::string& adminToken,
+                  int64_t untilSeconds);
+
+    int ReserveLoadBalancer();
+    int FreeLoadBalancer() const;
+    int LoadBalancerStatus();
+
+
+    const std::string & getCpAddr()        const;
+    const std::string & getDataAddr()      const;
+    const std::string & getDataAddrV6()    const;
+    const std::string & getName()          const;
+    const std::string & getAdminToken()    const;
+    const std::string & getInstanceToken() const;
+    const std::string & getId()            const;
+
+    uint16_t  getCpPort()   const;
+    uint16_t  getDataPort() const;
+
+
+
+private:
+
+    /** Object used to call backend's grpc API routines. */
+    std::unique_ptr<LoadBalancer::Stub> stub_;
+
+    /** Control plane's IP address (dotted decimal format). */
+    std::string cpAddr;
+
+    /** Control plane's grpc port. */
+    uint16_t cpPort;
+
+
+
+    // Used to reserve control plane
+
+    /** LB's name. */
+    std::string lbName;
+
+    /** Token used to reserve LB. */
+    std::string adminToken;
+
+    /** Time LB reservation will run out. */
+    google::protobuf::Timestamp until;
+
+    /** Time in seconds past epoch that LB reservation will run out.
+     *  Same as "until" but in different format. */
+    int64_t untilSeconds;
+
+
+    // Reserve reply
+
+    /** CP sync data receiving IPv4 address. */
+    std::string syncIpAddress;
+
+    /** CP sync data receiving port. */
+    uint16_t syncUdpPort;
+
+    /** LB data receiving IPv4 address. */
+    std::string dataIpv4Address;
+
+    /** LB data receiving IPv6 address. */
+    std::string dataIpv6Address;
+
+    /** LB's id. */
+    std::string lbId;
+
+    /** Token back from CP for LB reservation. */
+    std::string instanceToken;
+
+
+    // Client stats
+
+    /** Map used to store stats on LB clients.
+     * Key is client name, val is LbClientStatus struct. */
+    std::unordered_map<std::string, LbClientStatus> clientStats;
+};
+
 
 #endif

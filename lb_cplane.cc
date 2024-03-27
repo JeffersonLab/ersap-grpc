@@ -188,132 +188,6 @@ using namespace std::chrono;
         }
 
 
-        /**
-         * Reserve a specified LB to use.
-         * @return 0 if successful, 1 if error in grpc communication
-         */
-        int LbControlPlaneClient::ReserveLoadBalancer() {
-            // Reserve-LB message we are sending to server
-            ReserveLoadBalancerRequest request;
-
-            request.set_token(adminToken);
-            request.set_name(lbName);
-
-            // Set the time for this reservation to run out (now + reservedSec)
-            struct timespec t1;
-            clock_gettime(CLOCK_REALTIME, &t1);
-            auto timestamp = new google::protobuf::Timestamp{};
-            timestamp->set_seconds(t1.tv_sec + reservedSec);
-            timestamp->set_nanos(t1.tv_nsec);
-            // Give ownership of object to protobuf
-            request.set_allocated_until(timestamp);
-
-            // Container for the response we expect from server
-            ReserveLoadBalancerReply reply;
-
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
-            ClientContext context;
-
-            // The actual RPC
-            Status status = stub_->ReserveLoadBalancer(&context, request, &reply);
-
-            // Act upon its status
-            if (!status.ok()) {
-                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-                return 1;
-            }
-
-            // things returned from CP
-            instanceToken   = reply.token();
-            lbId            = reply.lbid();
-            syncIpAddress   = reply.syncipaddress();
-            syncUdpPort     = reply.syncudpport();
-            dataIpv4Address = reply.dataipv4address();
-            dataIpv6Address = reply.dataipv6address();
-
-            return 0;
-        }
-
-
-
-        /**
-         * Get LB status.
-         * @return 0 if successful, 1 if error in grpc communication
-         */
-        int LbControlPlaneClient::LoadBalancerStatus() {
-            // LB-request-for-status message we are sending to server
-            LoadBalancerStatusRequest request;
-
-            request.set_token(adminToken);
-            request.set_lbid(lbId);
-
-            // Container for the response we expect from server
-            LoadBalancerStatusReply reply;
-
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
-            ClientContext context;
-
-            // The actual RPC
-            Status status = stub_->LoadBalancerStatus(&context, request, &reply);
-
-            // Act upon its status
-            if (!status.ok()) {
-                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-                return 1;
-            }
-
-            // Things returned from CP
-
-            // How many clients on this LB?
-            int clientCount = reply.workers_size();
-
-            for (size_t j = 0; j < clientCount; j++) {
-                std::string name = reply.workers(j).name();
-
-                // Either returns the entry at this key, or creates one if none exists
-                auto & stats = clientStats[name];
-                stats.fillPercent   = reply.workers(j).fillpercent();
-                stats.controlSignal = reply.workers(j).controlsignal();
-                stats.slotsAssigned = reply.workers(j).slotsassigned();
-                stats.lastUpdated   = reply.workers(j).lastupdated();
-                stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
-            }
-
-            return 0;
-        }
-
-
-        /**
-         * Free the LB from a single reserved slot.
-         * @return 0 if successful, 1 if error in grpc communication
-         */
-        int LbControlPlaneClient::FreeLoadBalancer() const {
-
-            // Free-LB message we are sending to server
-            FreeLoadBalancerRequest request;
-            request.set_token(instanceToken);
-            request.set_lbid(lbId);
-
-            // Container for the response we expect from server
-            FreeLoadBalancerReply reply;
-
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
-            ClientContext context;
-
-            // The actual RPC
-            Status status = stub_->FreeLoadBalancer(&context, request, &reply);
-
-            // Act upon its status
-            if (!status.ok()) {
-                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-                return 1;
-            }
-            return 0;
-        }
-
 
         /**
 		 * Register this backend with the control plane.
@@ -456,6 +330,180 @@ using namespace std::chrono;
 
         bool       LbControlPlaneClient::getIsReady()            const   {return isReady;}
 
-    
-  
+
+
+        /////////////////////////////////
+        // LbReservation class
+        /////////////////////////////////
+
+
+        /**
+         * Constructor.
+         * @param cIp       grpc IP address of control plane (dotted decimal format).
+         * @param cPort     grpc port of control plane.
+         * @param name      name of LB being reserved.
+         * @param token     administration token.
+         * @param until     seconds since epoch until which to reserve the LB.
+         *
+         */
+        LbReservation::LbReservation (const std::string& cpIP, uint16_t cpPort,
+                                      const std::string& name,
+                                      const std::string& token,
+                                      int64_t until) :
+
+                cpAddr(cIP), cpPort(cPort), lbName(name),
+                adminToken(token), untilSeconds(until) {
+
+            cpTarget = cIP + ":" + std::to_string(cPort);
+            stub_ = LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+        }
+
+
+        /**
+         * Reserve a specified LB to use.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbReservation::ReserveLoadBalancer() {
+            // Reserve-LB message we are sending to server
+            ReserveLoadBalancerRequest request;
+
+            request.set_token(adminToken);
+            request.set_name(lbName);
+
+            // Set the time for this reservation to run out
+            auto timestamp = new google::protobuf::Timestamp{};
+            timestamp->set_seconds(untilSeconds);
+            timestamp->set_nanos(0);
+            // Give ownership of object to protobuf
+            request.set_allocated_until(timestamp);
+
+            // Container for the response we expect from server
+            ReserveLoadBalancerReply reply;
+
+            // Context for the client. It could be used to convey extra information to
+            // the server and/or tweak certain RPC behaviors.
+            ClientContext context;
+
+            // The actual RPC
+            Status status = stub_->ReserveLoadBalancer(&context, request, &reply);
+
+            // Act upon its status
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // things returned from CP
+            instanceToken   = reply.token();
+            lbId            = reply.lbid();
+            syncIpAddress   = reply.syncipaddress();
+            syncUdpPort     = reply.syncudpport();
+            dataIpv4Address = reply.dataipv4address();
+            dataIpv6Address = reply.dataipv6address();
+
+            return 0;
+        }
+
+
+        /**
+         * Free the LB from a single reserved slot.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbReservation::FreeLoadBalancer() const {
+
+            // Free-LB message we are sending to server
+            FreeLoadBalancerRequest request;
+            request.set_token(instanceToken);
+            request.set_lbid(lbId);
+
+            // Container for the response we expect from server
+            FreeLoadBalancerReply reply;
+
+            // Context for the client. It could be used to convey extra information to
+            // the server and/or tweak certain RPC behaviors.
+            ClientContext context;
+
+            // The actual RPC
+            Status status = stub_->FreeLoadBalancer(&context, request, &reply);
+
+            // Act upon its status
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+            return 0;
+        }
+
+
+
+        /**
+         * Get LB status.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbReservation::LoadBalancerStatus() {
+            // LB-request-for-status message we are sending to server
+            LoadBalancerStatusRequest request;
+
+            request.set_token(adminToken);
+            request.set_lbid(lbId);
+
+            // Container for the response we expect from server
+            LoadBalancerStatusReply reply;
+
+            // Context for the client. It could be used to convey extra information to
+            // the server and/or tweak certain RPC behaviors.
+            ClientContext context;
+
+            // The actual RPC
+            Status status = stub_->LoadBalancerStatus(&context, request, &reply);
+
+            // Act upon its status
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // Things returned from CP
+
+            // How many clients on this LB?
+            int clientCount = reply.workers_size();
+
+            for (size_t j = 0; j < clientCount; j++) {
+                std::string name = reply.workers(j).name();
+
+                // Either returns the entry at this key, or creates one if none exists
+                auto & stats = clientStats[name];
+                stats.fillPercent   = reply.workers(j).fillpercent();
+                stats.controlSignal = reply.workers(j).controlsignal();
+                stats.slotsAssigned = reply.workers(j).slotsassigned();
+                stats.lastUpdated   = reply.workers(j).lastupdated();
+                stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
+            }
+
+            return 0;
+        }
+
+
+
+        // Getters
+        const std::string & LbReservation::getLbName()        const   {return lbName;}
+        const std::string & LbReservation::getAdminToken()    const   {return adminToken;}
+        const std::string & LbReservation::getInstanceToken() const   {return instanceToken;}
+        const std::string & LbReservation::getLbId()          const   {return lbId;}
+
+        const std::string & LbReservation::getCpAddr()        const   {return cpAddr;}
+        const std::string & LbReservation::getSyncAddr()      const   {return syncIpAddress;}
+        const std::string & LbReservation::getDataAddrV4()    const   {return dataIpv4Address;}
+        const std::string & LbReservation::getDataAddrV6()    const   {return dataIpv6Address;}
+
+        uint16_t   LbReservation::getSyncPort() const   {return syncUdpPort;}
+        uint16_t   LbReservation::getCpPort()   const   {return cpPort;}
+        uint16_t   LbReservation::getDataPort() const   {return 19522;}
+         int64_t   LbReservation::getUntil()    const   {return untilSeconds;}
+         
+        bool  LbReservation::reserved() const  {return closed || timeElapsed;}
+        const std::unordered_map<std::string, LbClientStatus> & LbReservation::getClientStats() const {return clientStats;}
+
+
+
 
