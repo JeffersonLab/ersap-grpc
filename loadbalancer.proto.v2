@@ -1,0 +1,169 @@
+//
+// Copyright 2024, Jefferson Science Associates, LLC.
+// Subject to the terms in the LICENSE file found in the top-level directory.
+//
+// EPSCI Group
+// Thomas Jefferson National Accelerator Facility
+// 12000, Jefferson Ave, Newport News, VA 23606
+// (757)-269-7100
+
+syntax = "proto3";
+package loadbalancer;
+option go_package = "github.com/esnet/udplbd/pkg/pb";
+import "google/protobuf/timestamp.proto";
+
+enum PortRange {
+    PORT_RANGE_1 = 0;
+    PORT_RANGE_2 = 1;
+    PORT_RANGE_4 = 2;
+    PORT_RANGE_8 = 3;
+    PORT_RANGE_16 = 4;
+    PORT_RANGE_32 = 5;
+    PORT_RANGE_64 = 6;
+    PORT_RANGE_128 = 7;
+    PORT_RANGE_256 = 8;
+    PORT_RANGE_512 = 9;
+    PORT_RANGE_1024 = 10;
+    PORT_RANGE_2048 = 11;
+    PORT_RANGE_4096 = 12;
+    PORT_RANGE_8192 = 13;
+    PORT_RANGE_16384 = 14;
+}
+
+// The backend state reporting service definition.
+service LoadBalancer {
+	// Reserves a new LB. Sends, to the CP, a request to use a specified LB when connecting and
+	// the reply contains the LB info
+	rpc ReserveLoadBalancer (ReserveLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
+	// Retrieves the reservation details of an LB
+	rpc GetLoadBalancer (GetLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
+	// Retrieves the status of an LB
+	rpc LoadBalancerStatus (LoadBalancerStatusRequest) returns (LoadBalancerStatusReply) {};
+	// Sends, to the CP, a request to be released from using the LB
+	rpc FreeLoadBalancer (FreeLoadBalancerRequest) returns (FreeLoadBalancerReply) {};
+
+	// Sends a backend's registration request to CP
+	rpc Register (RegisterRequest) returns (RegisterReply) {};
+	// Sends a backend's request to unregister to CP
+	rpc Deregister (DeregisterRequest) returns (DeregisterReply) {};
+	// Sends a backend's state to CP
+	rpc SendState (SendStateRequest) returns (SendStateReply) {};
+}
+
+
+//
+//  ReserveLoadBalancer
+//
+message ReserveLoadBalancerRequest {
+	string token = 1; // admin token
+	string name = 2;  // name of the new LB instance
+	google.protobuf.Timestamp until = 4; // when this reservation should end
+}
+
+//
+//  GetLoadBalancer will return same as ReserveLoadBalancer but without token
+//
+message GetLoadBalancerRequest {
+	string token = 1; // admin token
+	string lbId = 2;  // LB instance identifier
+}
+
+// Reply with instance token
+message ReserveLoadBalancerReply {
+	string token = 1;           // LB instance token
+	string lbId = 2;            // LB instance identifier
+	string syncIpAddress = 3;   // CP sync data receiving IPv4 address
+	uint32 syncUdpPort = 4;     // CP sync data receiving port
+	string dataIpv4Address = 5; // LB data receiving IPv4 address
+	string dataIpv6Address = 6; // LB data receiving IPv6 address
+}
+
+
+//
+//  LoadBalancerStatus
+//
+message LoadBalancerStatusRequest {
+	string token = 1; // admin token or instance token
+	string lbId = 2;  // LB instance identifier
+}
+message WorkerStatus {
+	string name = 1;
+	float fillPercent = 2;
+	float controlSignal = 3;
+	uint32 slotsAssigned = 4;
+	google.protobuf.Timestamp lastUpdated = 5; // time that this node was last updated
+}
+message LoadBalancerStatusReply {
+	google.protobuf.Timestamp timestamp = 1; // time that this message was generated
+	uint64 currentEpoch = 2; // current epoch
+	uint64 currentPredictedEventNumber = 3; // Current predicted event number
+	repeated WorkerStatus workers = 4;
+}
+
+
+
+//
+// FreeLoadBalancer
+//
+message FreeLoadBalancerRequest {
+	string token = 1; // admin token or instance token
+	string lbId = 2;  // LB instance identifier
+}
+message FreeLoadBalancerReply {
+
+}
+
+
+
+//
+// Register
+//
+message RegisterRequest {
+	string token = 1;        // instance token or admin token
+	string lbId = 2;         // LB instance identifier
+	string name = 3;         // name of backend
+	float  weight = 4;       // normalized relative weight of the node for initial LB calendar (0 to 1)
+	string ipAddress = 5;    // backend data receiving IPv4 address
+	uint32 udpPort = 6;      // backend data receiving UDP port
+	PortRange portRange = 7; // backend "entropy" or range of ports
+}
+// Reply with session token
+message RegisterReply {
+	string token = 1;     // Token to use as sessionToken in subsequent requests
+	string sessionId = 2; // Session identifier to use in subsequent requests
+}
+
+
+
+//
+// Deregister
+//
+// The message being sent to server when backend is deregistering
+message DeregisterRequest {
+	string token = 1;     // session token from RegisterReply
+	string lbId = 2;      // LB instance identifier
+	string sessionId = 3; // session id from RegisterReply
+}
+// DeregisterReply is intentionally blank (in case more data needed in future)
+message DeregisterReply {
+
+}
+
+
+
+//
+// SendState
+//
+message SendStateRequest {
+	string token = 1;     // session token, instance token, or admin token
+	string sessionId = 2; // session id to update
+	string lbId = 3;      // LB instance identifier
+	google.protobuf.Timestamp timestamp = 4; // local time when backend state determined (millisec since Epoch, 1970-01-01)
+	float fillPercent = 5;   // normalized level of fifo entries that are filled with unprocessed data (0 to 1)
+	float controlSignal = 6; // change to data rate
+	bool isReady = 7;        // If true, ready to accept more data, else not ready
+}
+// SendStateReply is intentionally blank (in case more data needed in future)
+message SendStateReply {
+
+}
