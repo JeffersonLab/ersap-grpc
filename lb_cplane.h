@@ -65,6 +65,8 @@
 #include "loadbalancer.grpc.pb.h"
 #endif
 
+#include <boost/asio.hpp>
+#include <boost/system/system_error.hpp>
 
 using grpc::Channel;
 using grpc::ClientContext;
@@ -91,6 +93,19 @@ using loadbalancer::RegisterReply;
 using loadbalancer::DeregisterReply;
 using loadbalancer::SendStateReply;
 using loadbalancer::GetLoadBalancerRequest;
+
+using loadbalancer::AddSendersRequest;
+using loadbalancer::AddSendersReply;
+
+using loadbalancer::RemoveSendersRequest;
+using loadbalancer::RemoveSendersReply;
+
+using loadbalancer::VersionRequest;
+using loadbalancer::VersionReply;
+
+using loadbalancer::OverviewRequest;
+using loadbalancer::OverviewReply;
+using loadbalancer::Overview;
 
 
 //using google::protobuf::util;
@@ -187,6 +202,7 @@ class BackEnd {
 };
 
 
+//------------------------------------------------------------------------------------
 
 
 /** Class used to send data from backend (client) to control plane (server). */
@@ -198,7 +214,8 @@ class LbControlPlaneClient {
                              const std::string& beIP, uint16_t bePort,
                              PortRange bePortRange,
                              const std::string& name, const std::string& token,
-                             const std::string& lbId, float weight);
+                             const std::string& lbId,
+                             float weight, float minFactor, float maxFactor);
 
       	int Register();
       	int Deregister() const;
@@ -226,7 +243,10 @@ class LbControlPlaneClient {
     private:
 
     /** Object used to call backend's grpc API routines. */
-    std::unique_ptr<LoadBalancer::Stub> stub_;
+    std::unique_ptr<LoadBalancer::Stub> _stub;
+
+    /** Another object used to call backend's grpc API routines. */
+    std::shared_ptr<grpc::Channel> _channel;
 
     /** Control plane's IP address (dotted decimal format). */
     std::string cpAddr;
@@ -259,6 +279,18 @@ class LbControlPlaneClient {
     /** This backend client's data-receiving port range. */
     PortRange beRange;
 
+    /** This factor is multiplied with the number of scheduling slots that
+     *  would be assigned evenly, to determine min number of slots. For example,
+     *  4 nodes with a minFactor of 0.5 = (512 slots / 4) * 0.5 = min 64 slots. */
+    float minFactor;
+
+    /** This factor is multiplied with the number of scheduling slots that
+     *  would be assigned evenly, to determine max number of slots. For example,
+     *  4 nodes with a maxFactor of 2 = (512 slots / 4) * 2 = max 256 slots.
+     *  Set to 0 to specify no maximum. */
+    float maxFactor;
+
+
 
     // Reply from registration request
 
@@ -284,6 +316,7 @@ class LbControlPlaneClient {
 };
 
 
+//------------------------------------------------------------------------------------
 
 
 /** Class used to keep status data for a single client/backend. */
@@ -314,84 +347,58 @@ public:
 };
 
 
+//------------------------------------------------------------------------------------
 
 
-/** Class used to reserve/free a load balancer. */
-class LbReservation {
+/** Class used to keep status data for a single reserved LB in a CP. */
+class LdBalancer {
 
 public:
 
-    static std::string ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
-                                           std::string lbName, std::string adminToken,
-                                           int64_t untilSeconds, bool ipv6);
-
-    static int FreeLoadBalancer(const std::string& cpIP, uint16_t cpPort,
-                                std::string lbId, std::string adminToken);
-
-    static int LoadBalancerStatus(const std::string& cpIP, uint16_t cpPort,
-                                  std::string lbId, std::string adminToken,
-                                  std::unordered_map<std::string, LbClientStatus>& stats);
-
-    static std::string GetLbUri(const std::string& cpIP, uint16_t cpPort,
-                        std::string lbId, std::string adminToken,
-                        bool useIPv6);
+    friend class CpOverview;
+    friend class LbAdmin;
 
 
+    // Getters
+    const std::string & getName()          const   {return name;}
+    const std::string & getInstanceToken() const   {return instanceToken;}
+    const std::string & getLbId()          const   {return lbId;}
+
+    const std::string & getSyncAddr()      const   {return syncIpAddress;}
+    const std::string & getDataAddrV4()    const   {return dataIpv4Address;}
+    const std::string & getDataAddrV6()    const   {return dataIpv6Address;}
+
+    uint16_t   getSyncPort() const   {return syncUdpPort;}
+    uint16_t   getDataPort() const   {return 19522;}
+    int64_t     getUntil()   const   {return untilSeconds;}
+    uint32_t   getFpgaLbId() const   {return fpgaLbId;}
+
+    bool reservationElapsed() const {
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+
+        if (now.tv_sec > untilSeconds) {
+            return true;
+        }
+        return false;
+    };
+
+    const std::set<std::string> & getSenders() const {return senders;}
 
 
-    LbReservation(const std::string& cpIP, uint16_t cpPort,
-                  const std::string& _name, const std::string& adminToken,
-                  int64_t untilSeconds);
+    // From LoadBalancerStatusReply msg
+    int64_t  getExpiresAt()    const {return expireAtSeconds;}
+    uint64_t getCurrentEpoch() const {return curEpoch;}
+    uint64_t getPredictedEventNumber() const {return curPredictedEventNum;}
+    const std::set<std::string> & getCurSenders() const {return curSenders;}
+    const std::unordered_map<std::string, LbClientStatus> &
+                    getClientStats() const {return clientStats;}
 
-    int ReserveLoadBalancer();
-    int FreeLoadBalancer() const;
-    int LoadBalancerStatus();
-
-    const std::string & getLbName()        const;
-    const std::string & getAdminToken()    const;
-    const std::string & getInstanceToken() const;
-    const std::string & getLbId()          const;
-
-    const std::string & getCpAddr()        const;
-    const std::string & getSyncAddr()      const;
-    const std::string & getDataAddrV4()    const;
-    const std::string & getDataAddrV6()    const;
-
-    uint16_t getSyncPort() const;
-    uint16_t getCpPort()   const;
-    uint16_t getDataPort() const;
-     int64_t getUntil()    const;
-
-    bool reservationElapsed() const;
-    bool reserved() const;
-    const std::unordered_map<std::string, LbClientStatus> & getClientStats() const;
 
 
 private:
 
-
-    /** Does this object represent a current LB reservation?
-     *  Or has it expired or been terminated? */
-    bool isReserved = false;
-
-    /** Object used to call backend's grpc API routines. */
-    std::unique_ptr<LoadBalancer::Stub> stub_;
-
-    /** Control plane's IP address (dotted decimal format). */
-    std::string cpAddr;
-
-    /** Control plane's grpc port. */
-    uint16_t cpPort;
-
-
-
-    // Used to reserve control plane
-
-    /** LB's name. */
-    std::string lbName;
-
-    /** Token used to reserve LB. */
-    std::string adminToken;
+    std::string name;
 
     /** Time LB reservation will run out. */
     google::protobuf::Timestamp until;
@@ -399,6 +406,10 @@ private:
     /** Time in seconds past epoch that LB reservation will run out.
      *  Same as "until" but in different format. */
     int64_t untilSeconds;
+
+    /** Contains approved data senders. */
+    std::set<std::string> senders;
+
 
 
     // Reserve reply
@@ -421,12 +432,166 @@ private:
     /** Token back from CP for LB reservation. */
     std::string instanceToken;
 
+    /** FPGA LB ID, for use in correlating logs/metrics. */
+    uint32_t fpgaLbId;
 
-    // Client stats
+
+    // Status reply
+
+    /** Epoch currently in use. */
+    uint64_t curEpoch;
+
+    /** Next predicted event #. */
+    uint64_t curPredictedEventNum;
+
+    /** Time LB reservation will expire. */
+    google::protobuf::Timestamp expiresAt;
+
+    /** "expiresAt" in seconds past epoch. */
+    int64_t expireAtSeconds;
+
+    /** Contains data senders currently recognized. */
+    std::set<std::string> curSenders;
 
     /** Map used to store stats on LB clients.
      * Key is client name, val is LbClientStatus struct. */
     std::unordered_map<std::string, LbClientStatus> clientStats;
+};
+
+
+//------------------------------------------------------------------------------------
+
+
+/**
+ * A single instance of this class is used to represent the
+ * state of a control plane and all the load balancers it contains.
+ */
+class CpOverview {
+
+public:
+
+    CpOverview(const std::string& cpIP, uint16_t cpPort, const std::string& token);
+    int Overview();
+    int GetVersion();
+
+private:
+
+    /** Control plane's IP address (dotted decimal format). */
+    std::string cpAddr;
+
+    /** Control plane's grpc port. */
+    uint16_t cpPort;
+
+    /** CP version. */
+    std::string version;
+
+    /** Object used to call backend's grpc API routines. */
+    std::unique_ptr<LoadBalancer::Stub> _stub;
+
+    /** Token used to reserve LB. */
+    std::string adminToken;
+
+
+    /** Key = lbID, Val = LBalancer obj. */
+    std::unordered_map<std::string, LdBalancer> lbStats;
+};
+
+
+//------------------------------------------------------------------------------------
+
+
+/**
+ * A single instance of this class is used to represent and
+ * interact with a single load balancer.
+ * The static methods act on the specified LB.
+ */
+class LbAdmin {
+
+public:
+
+    static std::string ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
+                                           const std::string& lbName,
+                                           const std::string& adminToken,
+                                           const std::vector<std::string> &senders,
+                                           int64_t untilSeconds, bool ipv6);
+
+    static int FreeLoadBalancer(const std::string& cpIP, uint16_t cpPort,
+                                const std::string& lbId,
+                                const std::string& adminToken);
+
+    static int LoadBalancerStatus(const std::string& cpIP, uint16_t cpPort,
+                                  const std::string& lbId,
+                                  const std::string& adminToken,
+                                  std::unordered_map<std::string, LbClientStatus>& stats);
+
+    static std::string GetLbUri(const std::string& cpIP, uint16_t cpPort,
+                                const std::string& lbId,
+                                const std::string& adminToken,
+                                bool useIPv6);
+
+    static int AddSenders(const std::string& cpIP, uint16_t cpPort,
+                          const std::string& lbId,
+                          const std::string& adminToken,
+                          const std::set<std::string> &senders);
+
+    static int RemoveSenders(const std::string& cpIP, uint16_t cpPort,
+                             const std::string& lbId,
+                             const std::string& adminToken,
+                             const std::set<std::string> &senders);
+
+
+
+    LbAdmin(const std::string& cpIP, uint16_t cpPort,
+                  const std::string& adminToken);
+
+    int ReserveLoadBalancer(const std::string& name,
+                            const std::set<std::string> &senders,
+                            int64_t until);
+    int FreeLoadBalancer();
+    int LoadBalancerStatus();
+    int AddSenders(const std::set<std::string> &senders);
+    int RemoveSenders(const std::set<std::string> &senders);
+
+    const std::string & getAdminToken()  const;
+    const std::string & getUri4()        const;
+    const std::string & getUri6()        const;
+    const std::string & getCpAddr()      const;
+    uint16_t            getCpPort()      const;
+    bool reserved() const;
+
+
+
+
+private:
+
+
+    /** Does this object represent a current LB reservation?
+     *  Or has it expired or been terminated? */
+    bool isReserved = false;
+
+    /** Object used to call backend's grpc API routines. */
+    std::unique_ptr<LoadBalancer::Stub> _stub;
+
+    /** Control plane's IP address (dotted decimal format). */
+    std::string cpAddr;
+
+    /** Control plane's grpc port. */
+    uint16_t cpPort;
+
+    /** Token used to reserve LB. */
+    std::string adminToken;
+
+    /** URI IPv6 for using this LB. */
+    std::string uri6;
+
+    /** URI IPv4 for using this LB. */
+    std::string uri4;
+
+
+
+    /** Reserved LB. */
+    LdBalancer lb;
+
 };
 
 

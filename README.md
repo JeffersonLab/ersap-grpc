@@ -63,15 +63,10 @@ setup to vary both the delay and buffer sizes to get gaussian distributions for 
 The delay time between events sent is 5 millisec, but the processing time on the receiver is
 6.5 millisec for each event, thus the fifo gradually fills on the tester.
 
-### Extra Files
-
-The **lb_cplane_async.cc/h** files are included as a place to start for asynchronous communication
-between control plane and backend. They currently only use synchronous communication but could
-be modified in the future.
 
 ### Setting up the Environment
 
-The **setupgrpc** file helps sets up the environment for compilation, installation, and running.
+The **setup3.carl** file helps sets up the environment for compilation, installation, and running.
 Be sure to modify **GRPC_INSTALL_DIR** to point to the grpc installation directory.
 It should contain grpc libs and includes.
 
@@ -90,7 +85,7 @@ and make any changes relevant to the operating system being used.
 
 Do the following:
 
->**source setupgrpc  
+>**source setup3.carl  
 mkdir -p cmake/build  
 cd cmake/build  
 cmake ../..  

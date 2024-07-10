@@ -98,7 +98,7 @@ static uint64_t eventsProcessed = 0;
  */
 static void printHelp(char *programName) {
     fprintf(stderr,
-            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
+            "\nusage: %s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n",
             programName,
             "        [-h] [-v] [-ipv6]",
             "        [-p <data receiving port (for registration, 17750 default)>]",
@@ -110,7 +110,9 @@ static void printHelp(char *programName) {
             "        [-cp_addr <control plane IP address (default ejfat-2)>]",
             "        [-cp_port <control plane grpc port (default 18347)>]",
             "        [-name <backend name>]\n",
-            "        [-w <weight relative to other backends (default 1.)>]\n",
+            "        [-w <weight relative to other backends (default 1.)>]",
+            "        [-fmax <factor for max slot assign (default 0., no max)>]",
+            "        [-fmin <factor for min slot assign (default 0., no min)>]",
             "        [-lbid <id of LB to use (default LB_0)>]\n",
 
             "        [-count <# of fill values averaged, default = 1000>]",
@@ -170,6 +172,8 @@ static void printHelp(char *programName) {
  * @param ffactor       filled with fudge factor to multiply event processing time with.
  * @param maxEPR        filled with max event processing rate for node and have PID key on relative incoming ev rate.
  * @param weight        filled with weight of this relative to other backends for the given LB.
+ * @param fmax          filled with factor to set max # slots.
+ * @param fmin          filled with factor to set min # slots.
  */
 static void parseArgs(int argc, char **argv,
                       int *cores, float *setPt, uint16_t *cpPort,
@@ -182,7 +186,8 @@ static void parseArgs(int argc, char **argv,
                       bool *debug, bool *useIPv6,
                       char *cpAddr, char *clientName, char *lbid,
                       float *kp, float *ki, float *kd,
-                      float *fill, float *ffactor, float *maxEPR, float *weight) {
+                      float *fill, float *ffactor, float *maxEPR,
+                      float *weight, float *fmax, float *fmin) {
 
     int c, i_tmp;
     bool help = false;
@@ -211,6 +216,8 @@ static void parseArgs(int argc, char **argv,
                           {"stime",    1, nullptr, 20},
                           {"pid",      1, nullptr, 21},
                           {"lbid",     1, nullptr, 22},
+                          {"fmax",     1, nullptr, 23},
+                          {"fmin",     1, nullptr, 24},
                           {0,         0, 0,    0}
             };
 
@@ -617,6 +624,46 @@ static void parseArgs(int argc, char **argv,
                 strcpy(lbid, optarg);
                 break;
 
+            case 23:
+                // fmax
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -fmax\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp < 0.F) {
+                    fprintf(stderr, "Values to -fmax must be >= 0\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *fmax = sp;
+                break;
+
+            case 24:
+                // fmin
+                try {
+                    sp = (float) std::stof(optarg, nullptr);
+                }
+                catch (const std::invalid_argument& ia) {
+                    fprintf(stderr, "Invalid argument to -fmin\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                if (sp < 0.F) {
+                    fprintf(stderr, "Values to -fmin must be >= 0\n\n");
+                    printHelp(argv[0]);
+                    exit(-1);
+                }
+
+                *fmin = sp;
+                break;
+
             case 'v':
                 // VERBOSE
                 *debug = true;
@@ -996,6 +1043,9 @@ int main(int argc, char **argv) {
     uint32_t fifoCapacity = 1000;
     float    fifoCapacityFlt;
 
+
+    float minFactor = 0.F, maxFactor = 0.F;
+
     // PID loop variables
     float Kp = 0.52;
     float Ki = 0.005;
@@ -1045,7 +1095,8 @@ int main(int argc, char **argv) {
               &bufSize, &fifoCapacity, &fcount, &reportTime,
               &sampleTime, &processThds,
               &debug, &useIPv6, cpAddr,  clientName, lbid,
-              &Kp, &Ki, &Kd, &setFill, &ffactor, &maxEPR, &weight);
+              &Kp, &Ki, &Kd, &setFill, &ffactor, &maxEPR,
+              &weight, &maxFactor, &minFactor);
 
     // give it a default name
     if (strlen(clientName) < 1) {
@@ -1264,7 +1315,7 @@ int main(int argc, char **argv) {
     LbControlPlaneClient client(cpAddr, cpPort,
                                 listeningAddr, port, pRange,
                                 clientName, adminToken, lbid,
-                                weight);
+                                weight, minFactor, maxFactor);
 
     // Register this client with the grpc server
     int32_t err = client.Register();

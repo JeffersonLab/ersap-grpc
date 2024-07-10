@@ -32,15 +32,19 @@ enum PortRange {
 
 // The backend state reporting service definition.
 service LoadBalancer {
-	// Reserves a new LB. Sends, to the CP, a request to use a specified LB when connecting and
-	// the reply contains the LB info
+	// Reserves a new LB
 	rpc ReserveLoadBalancer (ReserveLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
 	// Retrieves the reservation details of an LB
 	rpc GetLoadBalancer (GetLoadBalancerRequest) returns (ReserveLoadBalancerReply) {};
-	// Retrieves the status of an LB
+	// Retrieves the current state of an LB
 	rpc LoadBalancerStatus (LoadBalancerStatusRequest) returns (LoadBalancerStatusReply) {};
-	// Sends, to the CP, a request to be released from using the LB
+	// Request a reserved LB to be released/freed
 	rpc FreeLoadBalancer (FreeLoadBalancerRequest) returns (FreeLoadBalancerReply) {};
+
+	// Update a sender address for an LB
+    rpc AddSenders (AddSendersRequest) returns (AddSendersReply) {};
+    // Delete a sender address from an LB
+    rpc RemoveSenders (RemoveSendersRequest) returns (RemoveSendersReply) {};
 
 	// Sends a backend's registration request to CP
 	rpc Register (RegisterRequest) returns (RegisterReply) {};
@@ -48,6 +52,11 @@ service LoadBalancer {
 	rpc Deregister (DeregisterRequest) returns (DeregisterReply) {};
 	// Sends a backend's state to CP
 	rpc SendState (SendStateRequest) returns (SendStateReply) {};
+
+	// Returns the name, LoadBalancerStatus data, and GetLoadBalancer data for all LBs
+	rpc Overview (OverviewRequest) returns (OverviewReply) {};
+	// Returns the version of the current LB.
+	rpc Version (VersionRequest) returns (VersionReply) {};
 }
 
 
@@ -55,27 +64,25 @@ service LoadBalancer {
 //  ReserveLoadBalancer
 //
 message ReserveLoadBalancerRequest {
-	string token = 1; // admin token
-	string name = 2;  // name of the new LB instance
-	google.protobuf.Timestamp until = 4; // when this reservation should end
+	string name = 2; // name of the new LB instance
+	google.protobuf.Timestamp until = 4; // when this reservation should end, if UNIX epoch, no expiration
+	repeated string senderAddresses = 5; // allowed ip addresses to send, v4 or v6
 }
-
 //
 //  GetLoadBalancer will return same as ReserveLoadBalancer but without token
 //
 message GetLoadBalancerRequest {
-	string token = 1; // admin token
-	string lbId = 2;  // LB instance identifier
+	string lbId = 2; // database identifier
 }
-
-// Reply with instance token
+// Reply with session token
 message ReserveLoadBalancerReply {
-	string token = 1;           // LB instance token
-	string lbId = 2;            // LB instance identifier
-	string syncIpAddress = 3;   // CP sync data receiving IPv4 address
-	uint32 syncUdpPort = 4;     // CP sync data receiving port
-	string dataIpv4Address = 5; // LB data receiving IPv4 address
-	string dataIpv6Address = 6; // LB data receiving IPv6 address
+	string token = 1; // instance token
+	string lbId = 2; // database identifier, this is what to use as lbId in other gRPCs
+	string syncIpAddress = 3; // backend data receiving IP address
+	uint32 syncUdpPort = 4; // backend data receiving IP address
+	string dataIpv4Address = 5; // backend data receiving IP address
+	string dataIpv6Address = 6; // backend data receiving IP address
+	uint32 fpgaLbId = 7; // FPGA LB ID, for use in correlating logs/metrics
 }
 
 
@@ -83,8 +90,7 @@ message ReserveLoadBalancerReply {
 //  LoadBalancerStatus
 //
 message LoadBalancerStatusRequest {
-	string token = 1; // admin token or instance token
-	string lbId = 2;  // LB instance identifier
+	string lbId = 2; // load balancer instance identifier
 }
 message WorkerStatus {
 	string name = 1;
@@ -98,7 +104,31 @@ message LoadBalancerStatusReply {
 	uint64 currentEpoch = 2; // current epoch
 	uint64 currentPredictedEventNumber = 3; // Current predicted event number
 	repeated WorkerStatus workers = 4;
+	repeated string senderAddresses = 5;
+	google.protobuf.Timestamp expiresAt = 6; // When this LB expires
 }
+
+
+
+//
+// AddSenders
+//
+message AddSendersRequest {
+    string lbId = 2; // load balancer instance identifier
+    repeated string senderAddresses = 3; // sender IP addresses to add to the whitelist
+}
+message AddSendersReply {}
+
+
+
+//
+// RemoveSenders
+//
+message RemoveSendersRequest {
+    string lbId = 2; // load balancer instance identifier
+    repeated string senderAddresses = 3; // sender IP addresses to delete from the whitelist
+}
+message RemoveSendersReply {}
 
 
 
@@ -106,12 +136,9 @@ message LoadBalancerStatusReply {
 // FreeLoadBalancer
 //
 message FreeLoadBalancerRequest {
-	string token = 1; // admin token or instance token
-	string lbId = 2;  // LB instance identifier
+	string lbId = 2; // load balancer instance identifier
 }
-message FreeLoadBalancerReply {
-
-}
+message FreeLoadBalancerReply {}
 
 
 
@@ -119,18 +146,26 @@ message FreeLoadBalancerReply {
 // Register
 //
 message RegisterRequest {
-	string token = 1;        // instance token or admin token
-	string lbId = 2;         // LB instance identifier
-	string name = 3;         // name of backend
-	float  weight = 4;       // normalized relative weight of the node for initial LB calendar (0 to 1)
-	string ipAddress = 5;    // backend data receiving IPv4 address
-	uint32 udpPort = 6;      // backend data receiving UDP port
+	string lbId = 2; // load balancer instance identifier
+	string name = 3; // name of backend
+	float weight = 4; // relative weight of the node for initial lb calendar
+	string ipAddress = 5; // backend data receiving IP address
+	uint32 udpPort = 6; // backend data receiving UDP port
 	PortRange portRange = 7; // backend "entropy" or range of ports
+
+	// multiplied with the number of slots that would be assigned evenly to determine min number of slots
+	// for example, 4 nodes with a minFactor of 0.5 = (512 slots / 4) * 0.5 = min 64 slots
+	float minFactor = 8;
+
+	// multiplied with the number of slots that would be assigned evenly to determine max number of slots
+	// for example, 4 nodes with a maxFactor of 2 = (512 slots / 4) * 2 = max 256 slots
+	// set to 0 to specify no maximum
+	float maxFactor = 9;
 }
 // Reply with session token
 message RegisterReply {
-	string token = 1;     // Token to use as sessionToken in subsequent requests
-	string sessionId = 2; // Session identifier to use in subsequent requests
+	string token = 1; // Ssession token
+	string sessionId = 2; // Session identifier to use in subseq uent requests
 }
 
 
@@ -140,14 +175,11 @@ message RegisterReply {
 //
 // The message being sent to server when backend is deregistering
 message DeregisterRequest {
-	string token = 1;     // session token from RegisterReply
-	string lbId = 2;      // LB instance identifier
-	string sessionId = 3; // session id from RegisterReply
+	string lbId = 2; // load balancer instance identifier
+	string sessionId = 3; // session token from RegisterReply
 }
 // DeregisterReply is intentionally blank (in case more data needed in future)
-message DeregisterReply {
-
-}
+message DeregisterReply {}
 
 
 
@@ -155,15 +187,40 @@ message DeregisterReply {
 // SendState
 //
 message SendStateRequest {
-	string token = 1;     // session token, instance token, or admin token
+	string lbId = 3; // load balancer instance identifier
 	string sessionId = 2; // session id to update
-	string lbId = 3;      // LB instance identifier
 	google.protobuf.Timestamp timestamp = 4; // local time when backend state determined (millisec since Epoch, 1970-01-01)
-	float fillPercent = 5;   // normalized level of fifo entries that are filled with unprocessed data (0 to 1)
+	float fillPercent = 5; // % of fifo entries that are filled with unprocessed data (0 to 1)
 	float controlSignal = 6; // change to data rate
-	bool isReady = 7;        // If true, ready to accept more data, else not ready
+	bool isReady = 7; // If true, ready to accept more data, else not ready
 }
 // SendStateReply is intentionally blank (in case more data needed in future)
 message SendStateReply {
 
+}
+
+
+
+//
+// Version
+//
+message VersionRequest {
+}
+message VersionReply {
+	string commit = 1;
+}
+
+
+//
+// Overview
+//
+message OverviewRequest {
+}
+message Overview {
+	string name = 1;
+	ReserveLoadBalancerReply reservation = 3;
+	LoadBalancerStatusReply status = 4;
+}
+message OverviewReply {
+	repeated Overview loadBalancers = 1;
 }

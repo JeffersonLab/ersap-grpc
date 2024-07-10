@@ -16,7 +16,37 @@ using namespace std::chrono;
 
 
 
-		//////////////////
+
+        /**
+         * Create grpc stub object.
+         * @param cIp       grpc IP address of control plane (dotted decimal format).
+         * @param cPort     grpc port of control plane.
+         *
+         */
+        static std::unique_ptr<LoadBalancer::Stub>
+                createStub (const std::string& cpIP, uint16_t cpPort) {
+
+            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
+
+            // Disable most of server certificate validation
+            grpc::experimental::TlsChannelCredentialsOptions topts;
+            std::shared_ptr<grpc::experimental::NoOpCertificateVerifier> verifier =
+                    std::make_shared<grpc::experimental::NoOpCertificateVerifier>();
+            topts.set_verify_server_certs(false);
+            topts.set_check_call_host(false);
+            topts.set_certificate_verifier(verifier);
+
+            auto channel = grpc::CreateChannel(cpTarget, grpc::experimental::TlsCredentials(topts));
+            auto stub = LoadBalancer::NewStub(channel);
+
+            return stub;
+        }
+
+
+
+
+
+        //////////////////
 		// BackEnd class
 		/////////////////
 
@@ -26,7 +56,6 @@ using namespace std::chrono;
          * @param req registration request from backend.
          */
         BackEnd::BackEnd(const RegisterRequest* req) {
-            adminToken      = req->token();
         	name            = req->name();
         	lbId            = req->lbid();
         	weight          = req->weight();
@@ -146,6 +175,8 @@ using namespace std::chrono;
          * @param token        administration or instance token.
          * @param lbId         LB's id.
          * @param weight       weight of this client compared to others in schedule density.
+         * @param minFactor    multiplicative factor used to set min number of scheduling slots.
+         * @param maxFactor    multiplicative factor used to set max number of scheduling slots.
          *
          */
         LbControlPlaneClient::LbControlPlaneClient(
@@ -153,14 +184,25 @@ using namespace std::chrono;
                 const std::string& beIP, uint16_t bePort,
                 PortRange beRange,
                 const std::string& cliName, const std::string& token,
-                const std::string& lbId, float weight) :
+                const std::string& lbId,
+                float weight, float minFactor, float maxFactor) :
 
                 cpAddr(cpIP), cpPort(cpPort), beAddr(beIP), bePort(bePort),
-                beRange(beRange), name(cliName), token(token),
-                lbId(lbId), weight(weight) {
+                beRange(beRange), name(cliName), token(token), lbId(lbId),
+                weight(weight), minFactor(minFactor), maxFactor(maxFactor) {
 
             std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            stub_ = LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+
+            // Disable most of server certificate validation
+            grpc::experimental::TlsChannelCredentialsOptions topts;
+            std::shared_ptr<grpc::experimental::NoOpCertificateVerifier> verifier =
+                    std::make_shared<grpc::experimental::NoOpCertificateVerifier>();
+            topts.set_verify_server_certs(false);
+            topts.set_check_call_host(false);
+            topts.set_certificate_verifier(verifier);
+
+            _channel = grpc::CreateChannel(cpTarget, grpc::experimental::TlsCredentials(topts));
+            _stub = LoadBalancer::NewStub(_channel);
         }
 
 
@@ -189,10 +231,11 @@ using namespace std::chrono;
 		    // Registration message we are sending to server
 		    RegisterRequest request;
 
-            request.set_token(token);
-            request.set_name(name);
             request.set_lbid(lbId);
+            request.set_name(name);
             request.set_weight(weight);
+            request.set_minfactor(minFactor);
+            request.set_maxfactor(maxFactor);
 
 		    // Network info for this client
             request.set_ipaddress(beAddr);
@@ -202,12 +245,14 @@ using namespace std::chrono;
 		    // Container for the response we expect from server
 		    RegisterReply reply;
 
-		    // Context for the client. It could be used to convey extra information to
-		    // the server and/or tweak certain RPC behaviors.
-		    ClientContext context;
+            // Context for the client. It could be used to convey extra information to
+            // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + token);
 
 		    // The actual RPC
-		    Status status = stub_->Register(&context, request, &reply);
+		    Status status = _stub->Register(&context, request, &reply);
 
 		    // Act upon its status
 		    if (!status.ok()) {
@@ -231,19 +276,18 @@ using namespace std::chrono;
 
     	    // Deregistration message we are sending to server
 		    DeregisterRequest request;
-            request.set_token(sessionToken);
             request.set_lbid(lbId);
             request.set_sessionid(sessionId);
 
 		    // Container for the response we expect from server
 		    DeregisterReply reply;
 
-		    // Context for the client. It could be used to convey extra information to
-		    // the server and/or tweak certain RPC behaviors.
-		    ClientContext context;
+            // Set bearer token in header.
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + token);
 
 		    // The actual RPC
-		    Status status = stub_->Deregister(&context, request, &reply);
+		    Status status = _stub->Deregister(&context, request, &reply);
 
 		    // Act upon its status
 		    if (!status.ok()) {
@@ -263,7 +307,6 @@ using namespace std::chrono;
 		    // Data we are sending to the server.
 		    SendStateRequest request;
 
-            request.set_token(sessionToken);
             request.set_lbid(lbId);
             request.set_sessionid(sessionId);
 
@@ -286,12 +329,12 @@ using namespace std::chrono;
 		    // Container for the data we expect from the server.
 		    SendStateReply reply;
 
-		    // Context for the client. It could be used to convey extra information to
-		    // the server and/or tweak certain RPC behaviors.
-		    ClientContext context;
+            // Set bearer token in header.
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + token);
 
 		    // The actual RPC.
-            Status status = stub_->SendState(&context, request, &reply);
+            Status status = _stub->SendState(&context, request, &reply);
 
 		    // Act upon its status.
 		    if (!status.ok()) {
@@ -323,7 +366,128 @@ using namespace std::chrono;
 
 
         /////////////////////////////////
-        // LbReservation class
+        // CpOverview class
+        /////////////////////////////////
+
+
+        /**
+        * Constructor.
+        * @param cIp       grpc IP address of control plane (dotted decimal format).
+        * @param cPort     grpc port of control plane.
+        * @param token     administration token.
+        *
+        */
+        CpOverview::CpOverview (const std::string& cpIP, uint16_t cpPort,
+                                const std::string& token) :
+
+                cpAddr(cpIP), cpPort(cpPort), adminToken(token) {
+
+            _stub = createStub(cpIP, cpPort);
+        }
+
+
+        /**
+         * Get the version of the current CP.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int CpOverview::GetVersion() {
+
+            // Get-version message we are sending to server
+            VersionRequest request;
+            VersionReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->Version(&context, request, &reply);
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            version = reply.commit();
+
+            return 0;
+        }
+
+
+
+        /**
+         * Get overview of entire CP.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int CpOverview::Overview() {
+            // Overview request message we are sending to server
+            OverviewRequest request;
+            OverviewReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->Overview(&context, request, &reply);
+
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            //----------------------------
+            // Things returned from CP
+
+            // How many LBs?
+            int lbCount = reply.loadbalancers_size();
+
+            // For each LB in this CP ...
+            for (size_t j = 0; j < lbCount; j++) {
+                std::string name = reply.loadbalancers(j).name();
+
+                auto res = reply.loadbalancers(j).reservation();
+
+                LdBalancer lb;
+
+                lb.name = name;
+                lb.instanceToken   = res.token();
+                lb.lbId            = res.lbid();
+                lb.syncIpAddress   = res.syncipaddress();
+                lb.syncUdpPort     = res.syncudpport();
+                lb.dataIpv4Address = res.dataipv4address();
+                lb.dataIpv6Address = res.dataipv6address();
+                lb.fpgaLbId        = res.fpgalbid();
+
+
+                auto status = reply.loadbalancers(j).status();
+
+                lb.curEpoch= status.currentepoch();
+                lb.curPredictedEventNum = status.currentpredictedeventnumber();
+                lb.expiresAt = status.expiresat();
+                lb.expireAtSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+
+
+                int workerCount = status.workers_size();
+
+                for (int i=0; i < workerCount; i++) {
+                    auto worker = status.workers(i);
+
+                    // Either returns the entry at this key, or creates one if none exists
+                    auto & stats = lb.clientStats[name];
+                    stats.fillPercent   = worker.fillpercent();
+                    stats.controlSignal = worker.controlsignal();
+                    stats.slotsAssigned = worker.slotsassigned();
+                    stats.lastUpdated   = worker.lastupdated();
+                    stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
+                }
+
+                // put lb somewhere
+                lbStats[lb.lbId] = lb;
+            }
+
+            return 0;
+        }
+
+
+
+        /////////////////////////////////
+        // LbAdmin class
         /////////////////////////////////
 
 
@@ -333,20 +497,16 @@ using namespace std::chrono;
          * @param cPort     grpc port of control plane.
          * @param name      name of LB being reserved.
          * @param token     administration token.
+         * @param senders   vector of IP addresses allowed to send to LB.
          * @param until     seconds since epoch until which to reserve the LB.
          *
          */
-        LbReservation::LbReservation (const std::string& cpIP, uint16_t cpPort,
-                                      const std::string& name,
-                                      const std::string& admintoken,
-                                      int64_t until) :
+        LbAdmin::LbAdmin (const std::string& cpIP, uint16_t cpPort,
+                                      const std::string& token) :
 
-                cpAddr(cpIP), cpPort(cpPort), lbName(name),
-                adminToken(admintoken),
-                untilSeconds(until) {
+                cpAddr(cpIP), cpPort(cpPort), adminToken(token) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            stub_ = LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+            _stub = createStub(cpIP, cpPort);
         }
 
 
@@ -356,32 +516,59 @@ using namespace std::chrono;
          * URI value written into the EJFAT_URI env variable.
          * This will happen if there's an error.
          *
+         * @param name      name of LB being reserved.
+         * @param senders   set of IP addresses allowed to send to LB.
+         * @param until     seconds since epoch until which to reserve the LB.
+         *
          * @return 0 if successful, 1 if error in grpc communication
          *           or until in already in the past.
          */
-        int LbReservation::ReserveLoadBalancer() {
+        int LbAdmin::ReserveLoadBalancer(const std::string& name,
+                                         const std::set<std::string> &senders,
+                                         int64_t until) {
+
             // Reserve-LB message we are sending to server
             ReserveLoadBalancerRequest request;
 
-            request.set_token(adminToken);
-            request.set_name(lbName);
+            request.set_name(name);
 
             // Set the time for this reservation to run out
             auto timestamp = new google::protobuf::Timestamp{};
-            timestamp->set_seconds(untilSeconds);
+            timestamp->set_seconds(until);
             timestamp->set_nanos(0);
+
+            // store locally
+            lb.until = *timestamp;
+            lb.untilSeconds = until;
+
             // Give ownership of object to protobuf
             request.set_allocated_until(timestamp);
+
+            // add sender IP addresses, but check if they are valid
+            std::set<std::string> validSenders;
+
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+                request.add_senderaddresses(s);
+                validSenders.insert(s);
+            }
 
             // Container for the response we expect from server
             ReserveLoadBalancerReply reply;
 
             // Context for the client. It could be used to convey extra information to
             // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
             // The actual RPC
-            Status status = stub_->ReserveLoadBalancer(&context, request, &reply);
+            Status status = _stub->ReserveLoadBalancer(&context, request, &reply);
 
             // Act upon its status
             if (!status.ok()) {
@@ -389,94 +576,230 @@ using namespace std::chrono;
                 return 1;
             }
 
-            // To get around a bug in which we get a blank field for syncIpAddress.
-            // it should be the same as cpIP.
-            std::string syncIP = reply.syncipaddress();
-            if (syncIP.empty() || syncIP.size() < 16) {
-                syncIP = cpAddr;
-            }
-
             // things returned from CP
-            instanceToken   = reply.token();
-            lbId            = reply.lbid();
-            syncIpAddress   = syncIP;
-            syncUdpPort     = reply.syncudpport();
-            dataIpv4Address = reply.dataipv4address();
-            dataIpv6Address = reply.dataipv6address();
+            lb.name = name;
+            lb.senders = validSenders;
+
+            lb.instanceToken   = reply.token();
+            lb.lbId            = reply.lbid();
+            lb.syncIpAddress   = reply.syncipaddress();
+            lb.syncUdpPort     = reply.syncudpport();
+            lb.dataIpv4Address = reply.dataipv4address();
+            lb.dataIpv6Address = reply.dataipv6address();
+            lb.fpgaLbId        = reply.fpgalbid();
 
             isReserved = true;
 
+            // Create URIs to use
+
+            std::stringstream ss;
+
+            if (!reply.dataipv6address().empty()) {
+                ss << "ejfat://" << reply.token() << "@" << cpAddr << ":" << cpPort;
+                ss << "/lb/" << reply.lbid();
+                ss << "?data=" << reply.dataipv6address() << ":19522";
+                ss << "&sync=" << reply.syncipaddress() << ":" << reply.syncudpport();
+                uri6 = ss.str();
+            }
+
+
+            if (!reply.dataipv4address().empty()) {
+                ss.str("");  // Clear the content
+                ss.clear();  // Reset the error state
+                ss << "ejfat://" << reply.token() << "@" << cpAddr << ":" << cpPort;
+                ss << "/lb/" << reply.lbid();
+                ss << "?data=" << reply.dataipv4address() << ":19522";
+                ss << "&sync=" << reply.syncipaddress() << ":" << reply.syncudpport();
+                uri4 = ss.str();
+            }
+
             return 0;
         }
+
+
+
+        /**
+         * Add to the list of approved senders.
+         * @param senders senders to add.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbAdmin::AddSenders(const std::set<std::string> &senders) {
+
+            // Add senders message we are sending to server
+            AddSendersRequest request;
+
+            request.set_lbid(lb.lbId);
+
+            // Add sender IP addresses, check validity
+            int senderCount = 0;
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+
+                // Check if already in sender set
+                auto result = lb.curSenders.insert(s);
+
+                // True if insertion took place
+                if (result.second) {
+                    request.add_senderaddresses(s);
+                    senderCount++;
+                }
+            }
+
+            if (senderCount < 1) {
+                // These senders were all already known
+                return 0;
+            }
+
+            AddSendersReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->AddSenders(&context, request, &reply);
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // Nothing returned from CP
+
+            return 0;
+        }
+
+
+        /**
+         * Remove from the list of approved senders.
+         * @param senders senders to remove.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbAdmin::RemoveSenders(const std::set<std::string> &senders) {
+
+            // Remove senders message we are sending to server
+            RemoveSendersRequest request;
+
+            request.set_lbid(lb.lbId);
+
+            // Remove sender IP addresses, check validity
+            int senderCount = 0;
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+
+                // Attempt to remove a sender
+                int numErased = lb.curSenders.erase(s);
+
+                if (numErased > 0) {
+                    request.add_senderaddresses(s);
+                    senderCount++;
+                }
+            }
+
+            if (senderCount < 1) {
+                // These senders were all already removed
+                return 0;
+            }
+
+            RemoveSendersReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->RemoveSenders(&context, request, &reply);
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // Nothing returned from CP
+
+            return 0;
+        }
+
 
 
         /**
          * Free the LB from a single reserved slot.
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int LbReservation::FreeLoadBalancer() const {
+        int LbAdmin::FreeLoadBalancer() {
 
             // Free-LB message we are sending to server
             FreeLoadBalancerRequest request;
-            request.set_token(adminToken);
-            request.set_lbid(lbId);
+            request.set_lbid(lb.lbId);
 
-            // Container for the response we expect from server
             FreeLoadBalancerReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
-            // The actual RPC
-            Status status = stub_->FreeLoadBalancer(&context, request, &reply);
-
-            // Act upon its status
+            Status status = _stub->FreeLoadBalancer(&context, request, &reply);
             if (!status.ok()) {
                 std::cout << status.error_code() << ": " << status.error_message() << std::endl;
                 return 1;
             }
+
+            isReserved = false;
             return 0;
         }
+
+
 
 
         /**
          * Get LB status.
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int LbReservation::LoadBalancerStatus() {
+        int LbAdmin::LoadBalancerStatus() {
             // LB-request-for-status message we are sending to server
             LoadBalancerStatusRequest request;
 
-            request.set_token(adminToken);
-            request.set_lbid(lbId);
+            request.set_lbid(lb.lbId);
 
-            // Container for the response we expect from server
             LoadBalancerStatusReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
-            // The actual RPC
-            Status status = stub_->LoadBalancerStatus(&context, request, &reply);
+            Status status = _stub->LoadBalancerStatus(&context, request, &reply);
 
-            // Act upon its status
             if (!status.ok()) {
                 std::cout << status.error_code() << ": " << status.error_message() << std::endl;
                 return 1;
             }
 
+            //----------------------------
             // Things returned from CP
+            lb.curEpoch = reply.currentepoch();
+            lb.curPredictedEventNum = reply.currentpredictedeventnumber();
+
+            lb.expiresAt = reply.expiresat();
+            lb.expireAtSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+
+            // How many senders?
+            int senderCount = reply.senderaddresses_size();
+            lb.curSenders.clear();
+            for (size_t j = 0; j < senderCount; j++) {
+                lb.curSenders.insert(reply.senderaddresses(j));
+            }
 
             // How many clients on this LB?
             int clientCount = reply.workers_size();
+            lb.clientStats.clear();
 
             for (size_t j = 0; j < clientCount; j++) {
                 std::string name = reply.workers(j).name();
 
                 // Either returns the entry at this key, or creates one if none exists
-                auto & stats = clientStats[name];
+                auto & stats = lb.clientStats[name];
                 stats.fillPercent   = reply.workers(j).fillpercent();
                 stats.controlSignal = reply.workers(j).controlsignal();
                 stats.slotsAssigned = reply.workers(j).slotsassigned();
@@ -567,6 +890,7 @@ using namespace std::chrono;
          * @param cpPort        control plane TCP port for grpc communication.
          * @param lbName        name to assign this LB.
          * @param adminToken    token used to interact with LB.
+         * @param senders       vector of IP addresses allowed to send to LB.
          * @param untilSeconds  time (seconds past epoch) at which reservation ends.
          * @param useIPv6       use IP version 6 destination address when constructing
          *                      URI containing info for sending data.
@@ -574,18 +898,17 @@ using namespace std::chrono;
          * @return resulting URI starting with "ejfat",
          *         else error string starting with "error".
          */
-        std::string LbReservation::ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
-                                                       std::string lbName, std::string adminToken,
-                                                       int64_t untilSeconds, bool useIPv6) {
+        std::string LbAdmin::ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
+                                                 const std::string& lbName,
+                                                 const std::string& adminToken,
+                                                 const std::vector<std::string> &senders,
+                                                 int64_t untilSeconds, bool useIPv6) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            std::unique_ptr<LoadBalancer::Stub> stub_ =
-                    LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+            auto _stub = createStub(cpIP, cpPort);
 
             // Reserve-LB message we are sending to server
             ReserveLoadBalancerRequest request;
 
-            request.set_token(adminToken);
             request.set_name(lbName);
 
             // Set the time for this reservation to run out
@@ -595,15 +918,26 @@ using namespace std::chrono;
             // Give ownership of object to protobuf
             request.set_allocated_until(timestamp);
 
+            // add sender IP addresses, but check they are valid
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+                request.add_senderaddresses(s);
+            }
+
             // Container for the response we expect from server
             ReserveLoadBalancerReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
             // The actual RPC
-            Status status = stub_->ReserveLoadBalancer(&context, request, &reply);
+            Status status = _stub->ReserveLoadBalancer(&context, request, &reply);
 
             // cpIP may have been specified as a host name and not in dot-decimal form.
             // Convert it now if necessary since we're going to need it in creating
@@ -624,13 +958,6 @@ using namespace std::chrono;
                 }
             }
 
-            // To get around a bug in which we get a blank field for syncIpAddress.
-            // it should be the same as cpIP.
-            std::string syncIP = reply.syncipaddress();
-            if (syncIP.empty() || syncIP.size() < 16) {
-                syncIP = ipAddr;
-            }
-
             // Act upon its status
             char url[256];
 
@@ -645,20 +972,125 @@ using namespace std::chrono;
                             reply.token().c_str(),
                             ipAddr.c_str(), cpPort, reply.lbid().c_str(),
                             reply.dataipv6address().c_str(), 19522,
-                            syncIP.c_str(), reply.syncudpport());
+                            reply.syncipaddress().c_str(), reply.syncudpport());
                 }
                 else {
                     sprintf(url, "ejfat://%s@%s:%hu/lb/%s?data=%s:%d&sync=%s:%d",
                             reply.token().c_str(),
                             ipAddr.c_str(), cpPort, reply.lbid().c_str(),
                             reply.dataipv4address().c_str(), 19522,
-                            syncIP.c_str(), reply.syncudpport());
+                            reply.syncipaddress().c_str(), reply.syncudpport());
 
                 }
             }
 
             return std::string(url);
         }
+
+
+
+        /**
+         * STATIC method to add to the list of approved senders.
+         *
+         * @param cpIP          control plane IP address for grpc communication.
+         * @param cpPort        control plane TCP port for grpc communication.
+         * @param lbId          id of LB to be freed.
+         * @param adminToken    token used to interact with LB.
+         * @param senders       senders to add.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbAdmin::AddSenders(const std::string& cpIP, uint16_t cpPort,
+                                const std::string& lbId,
+                                const std::string& adminToken,
+                                const std::set<std::string> &senders) {
+
+            auto _stub = createStub(cpIP, cpPort);
+
+            // Add senders message we are sending to server
+            AddSendersRequest request;
+
+            request.set_lbid(lbId);
+
+            // Add sender IP addresses, check validity
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+
+                request.add_senderaddresses(s);
+            }
+
+            AddSendersReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->AddSenders(&context, request, &reply);
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // Nothing returned from CP
+
+            return 0;
+        }
+
+
+
+        /**
+         * STATIC method to remove from the list of approved senders.
+         *
+         * @param cpIP          control plane IP address for grpc communication.
+         * @param cpPort        control plane TCP port for grpc communication.
+         * @param lbId          id of LB to be freed.
+         * @param adminToken    token used to interact with LB.
+         * @param senders       senders to remove.
+         * @return 0 if successful, 1 if error in grpc communication
+         */
+        int LbAdmin::RemoveSenders(const std::string& cpIP, uint16_t cpPort,
+                                const std::string& lbId,
+                                const std::string& adminToken,
+                                const std::set<std::string> &senders) {
+
+            auto _stub = createStub(cpIP, cpPort);
+
+            // Remove senders message we are sending to server
+            RemoveSendersRequest request;
+
+            request.set_lbid(lbId);
+
+            // Remove sender IP addresses, check validity
+            for (auto s : senders) {
+                try {
+                    boost::asio::ip::make_address(s);
+                }
+                catch (const boost::system::system_error& e) {
+                    std::cout << "skip bad ip addr, " << s << std::endl;
+                }
+
+                request.add_senderaddresses(s);
+            }
+
+            RemoveSendersReply reply;
+
+            ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
+
+            Status status = _stub->RemoveSenders(&context, request, &reply);
+            if (!status.ok()) {
+                std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+                return 1;
+            }
+
+            // Nothing returned from CP
+
+            return 0;
+        }
+
 
 
         /**
@@ -671,27 +1103,25 @@ using namespace std::chrono;
          *
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int LbReservation::FreeLoadBalancer(const std::string& cpIP, uint16_t cpPort,
-                                            std::string lbId, std::string adminToken) {
+        int LbAdmin::FreeLoadBalancer(const std::string& cpIP, uint16_t cpPort,
+                                      const std::string& lbId,
+                                      const std::string& adminToken) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            std::unique_ptr<LoadBalancer::Stub> stub_ =
-                    LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+            auto _stub = createStub(cpIP, cpPort);
 
             // Free-LB message we are sending to server
             FreeLoadBalancerRequest request;
-            request.set_token(adminToken);
             request.set_lbid(lbId);
 
             // Container for the response we expect from server
             FreeLoadBalancerReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
             // The actual RPC
-            Status status = stub_->FreeLoadBalancer(&context, request, &reply);
+            Status status = _stub->FreeLoadBalancer(&context, request, &reply);
 
             // Act upon its status
             if (!status.ok()) {
@@ -714,29 +1144,27 @@ using namespace std::chrono;
          *
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int LbReservation::LoadBalancerStatus(const std::string& cpIP, uint16_t cpPort,
-                                              std::string lbId, std::string adminToken,
-                                              std::unordered_map<std::string, LbClientStatus>& clientStats) {
+        int LbAdmin::LoadBalancerStatus(const std::string& cpIP, uint16_t cpPort,
+                                        const std::string& lbId,
+                                        const std::string& adminToken,
+                                        std::unordered_map<std::string, LbClientStatus>& clientStats) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            std::unique_ptr<LoadBalancer::Stub> stub_ =
-                    LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+            auto _stub = createStub(cpIP, cpPort);
 
             // LB-request-for-status message we are sending to server
             LoadBalancerStatusRequest request;
 
-            request.set_token(adminToken);
             request.set_lbid(lbId);
 
             // Container for the response we expect from server
             LoadBalancerStatusReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
             // The actual RPC
-            Status status = stub_->LoadBalancerStatus(&context, request, &reply);
+            Status status = _stub->LoadBalancerStatus(&context, request, &reply);
 
             // Act upon its status
             if (!status.ok()) {
@@ -779,29 +1207,27 @@ using namespace std::chrono;
          * @return resulting URI starting with "ejfat",
          *         else error string starting with "error".
          */
-        std::string LbReservation::GetLbUri(const std::string& cpIP, uint16_t cpPort,
-                                    std::string lbId, std::string adminToken,
-                                    bool useIPv6) {
+        std::string LbAdmin::GetLbUri(const std::string& cpIP, uint16_t cpPort,
+                                      const std::string& lbId,
+                                      const std::string& adminToken,
+                                      bool useIPv6) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-            std::unique_ptr<LoadBalancer::Stub> stub_ =
-                    LoadBalancer::NewStub(grpc::CreateChannel(cpTarget, grpc::InsecureChannelCredentials()));
+            auto _stub = createStub(cpIP, cpPort);
 
             // LB-request-for-connection info message we are sending to server
             GetLoadBalancerRequest request;
 
-            request.set_token(adminToken);
             request.set_lbid(lbId);
 
             // Container for the response we expect from server
             ReserveLoadBalancerReply reply;
 
-            // Context for the client. It could be used to convey extra information to
-            // the server and/or tweak certain RPC behaviors.
+            // Set bearer token in header.
             ClientContext context;
+            context.AddMetadata("authorization", "Bearer " + adminToken);
 
             // The actual RPC
-            Status status = stub_->GetLoadBalancer(&context, request, &reply);
+            Status status = _stub->GetLoadBalancer(&context, request, &reply);
 
             // cpIP may have been specified as a host name and not in dot-decimal form.
             // Convert it now if necessary since we're going to need it in creating
@@ -822,13 +1248,6 @@ using namespace std::chrono;
                 }
             }
 
-            // To get around a bug in which we get a blank field for syncIpAddress.
-            // it should be the same as cpIP.
-            std::string syncIP = reply.syncipaddress();
-            if (syncIP.empty() || syncIP.size() < 16) {
-                syncIP = ipAddr;
-            }
-
             // Act upon its status
             char url[256];
 
@@ -842,13 +1261,13 @@ using namespace std::chrono;
                     sprintf(url, "ejfat://%s:%hu/lb/%s?data=%s:%d&sync=%s:%d",
                             ipAddr.c_str(), cpPort, reply.lbid().c_str(),
                             reply.dataipv6address().c_str(), 19522,
-                            syncIP.c_str(), reply.syncudpport());
+                            reply.syncipaddress().c_str(), reply.syncudpport());
                 }
                 else {
                     sprintf(url, "ejfat://%s:%hu/lb/%s?data=%s:%d&sync=%s:%d",
                             ipAddr.c_str(), cpPort, reply.lbid().c_str(),
                             reply.dataipv4address().c_str(), 19522,
-                            syncIP.c_str(), reply.syncudpport());
+                            reply.syncipaddress().c_str(), reply.syncudpport());
 
                 }
             }
@@ -859,33 +1278,12 @@ using namespace std::chrono;
 
 
         // Getters
-        const std::string & LbReservation::getLbName()        const   {return lbName;}
-        const std::string & LbReservation::getAdminToken()    const   {return adminToken;}
-        const std::string & LbReservation::getInstanceToken() const   {return instanceToken;}
-        const std::string & LbReservation::getLbId()          const   {return lbId;}
-
-        const std::string & LbReservation::getCpAddr()        const   {return cpAddr;}
-        const std::string & LbReservation::getSyncAddr()      const   {return syncIpAddress;}
-        const std::string & LbReservation::getDataAddrV4()    const   {return dataIpv4Address;}
-        const std::string & LbReservation::getDataAddrV6()    const   {return dataIpv6Address;}
-
-        uint16_t   LbReservation::getSyncPort() const   {return syncUdpPort;}
-        uint16_t   LbReservation::getCpPort()   const   {return cpPort;}
-        uint16_t   LbReservation::getDataPort() const   {return 19522;}
-         int64_t   LbReservation::getUntil()    const   {return untilSeconds;}
-
-        bool LbReservation::reservationElapsed() const {
-            struct timespec now;
-            clock_gettime(CLOCK_REALTIME, &now);
-
-            if (now.tv_sec > untilSeconds) {
-                return true;
-            }
-            return false;
-        };
-        bool LbReservation::reserved() const {return isReserved && !reservationElapsed();}
-        const std::unordered_map<std::string, LbClientStatus> & LbReservation::getClientStats() const {return clientStats;}
-
+        const std::string & LbAdmin::getAdminToken() const {return adminToken;}
+        const std::string & LbAdmin::getCpAddr()     const {return cpAddr;}
+        uint16_t            LbAdmin::getCpPort()     const {return cpPort;}
+        const std::string & LbAdmin::getUri4()       const {return uri4;}
+        const std::string & LbAdmin::getUri6()       const {return uri6;}
+        bool LbAdmin::reserved() const {return isReserved && !lb.reservationElapsed();}
 
 
 
