@@ -216,6 +216,7 @@ class LbControlPlaneClient {
                              const std::string& name, const std::string& token,
                              const std::string& lbId,
                              float weight, float minFactor, float maxFactor);
+//    float weight = 1.F, float minFactor = 0.F, float maxFactor = 0.F);
 
       	int Register();
       	int Deregister() const;
@@ -244,9 +245,6 @@ class LbControlPlaneClient {
 
     /** Object used to call backend's grpc API routines. */
     std::unique_ptr<LoadBalancer::Stub> _stub;
-
-    /** Another object used to call backend's grpc API routines. */
-    std::shared_ptr<grpc::Channel> _channel;
 
     /** Control plane's IP address (dotted decimal format). */
     std::string cpAddr;
@@ -324,7 +322,7 @@ class LbClientStatus {
 
 public:
 
-    //std::string name;
+    std::string name;
     float fillPercent      = 0.;
     float controlSignal    = 0.;
     uint32_t slotsAssigned = 0;
@@ -337,7 +335,8 @@ public:
     int64_t updateTime;
 
 
-    void printClientStats(std::ostream& out, std::string& indent) {
+    void printClientStats(std::ostream& out, std::string& indent) const {
+        out << indent << "name :           " << name << std::endl;
         out << indent << "fill % :         " << fillPercent << std::endl;
         out << indent << "control sig :    " << controlSignal << std::endl;
         out << indent << "slots assigned : " << slotsAssigned << std::endl;
@@ -360,6 +359,9 @@ public:
 
 
     // Getters
+    const std::string & getUri4()          const   {return uri4;}
+    const std::string & getUri6()          const   {return uri6;}
+
     const std::string & getName()          const   {return name;}
     const std::string & getInstanceToken() const   {return instanceToken;}
     const std::string & getLbId()          const   {return lbId;}
@@ -395,6 +397,48 @@ public:
                     getClientStats() const {return clientStats;}
 
 
+    void printLbStats(std::ostream& out, std::string& indent) const {
+
+        std::string subLbIndent  = indent + "  ";
+        std::string workerIndent = indent + "    ";
+
+
+        out << indent << "LB_id " << lbId << "(" << name << "):" << std::endl;
+        out << subLbIndent << "fpga id: " << fpgaLbId << std::endl << std::endl;
+        out << subLbIndent << "token: " << instanceToken << std::endl;
+        out << subLbIndent << "sync addr: " << syncIpAddress << std::endl;
+        out << subLbIndent << "sync port: " << syncUdpPort << std::endl;
+
+        if (!dataIpv4Address.empty()) {
+            out << subLbIndent << "data ipv4 addr: " << dataIpv4Address << std::endl;
+            out << subLbIndent << "uri (ipv4): " << uri4 << std::endl;
+        }
+        if (!dataIpv6Address.empty()) {
+            out << subLbIndent << "data ipv6 addr: " << dataIpv6Address << std::endl;
+            out << subLbIndent << "uri (ipv6): " << uri6 << std::endl;
+        }
+
+
+        out << subLbIndent << "epoch: " << curEpoch << std::endl;
+        out << subLbIndent << "predicted event#: " << curPredictedEventNum << std::endl;
+        out << subLbIndent << "expire at sec: " << expireAtSeconds << std::endl << std::endl;
+
+        out << subLbIndent << "senders: " << std::endl;
+        for (const std::string sender : curSenders) {
+            out << workerIndent << sender << std::endl;
+        }
+
+        out << std::endl;
+
+        out << subLbIndent << "clients: " << std::endl;
+        for (const auto& workPair : clientStats) {
+            const LbClientStatus &stats = workPair.second;
+            stats.printClientStats(out, workerIndent);
+            out << std::endl;
+        }
+    }
+
+
 
 private:
 
@@ -409,6 +453,12 @@ private:
 
     /** Contains approved data senders. */
     std::set<std::string> senders;
+
+    /** Construct the IPv4 uri for reference. */
+    std::string uri4;
+
+    /** Construct the IPv6 uri for reference. */
+    std::string uri6;
 
 
 
@@ -468,11 +518,14 @@ private:
  */
 class CpOverview {
 
+    friend class LdBalancer;
+
 public:
 
     CpOverview(const std::string& cpIP, uint16_t cpPort, const std::string& token);
-    int Overview();
-    int GetVersion();
+    int getUpdate();
+    int getVersion();
+    void printCpStats(std::ostream& out, std::string& indent) const;
 
 private:
 
@@ -512,7 +565,7 @@ public:
     static std::string ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
                                            const std::string& lbName,
                                            const std::string& adminToken,
-                                           const std::vector<std::string> &senders,
+                                           const std::set<std::string> &senders,
                                            int64_t untilSeconds, bool ipv6);
 
     static int FreeLoadBalancer(const std::string& cpIP, uint16_t cpPort,

@@ -191,18 +191,7 @@ using namespace std::chrono;
                 beRange(beRange), name(cliName), token(token), lbId(lbId),
                 weight(weight), minFactor(minFactor), maxFactor(maxFactor) {
 
-            std::string cpTarget = cpIP + ":" + std::to_string(cpPort);
-
-            // Disable most of server certificate validation
-            grpc::experimental::TlsChannelCredentialsOptions topts;
-            std::shared_ptr<grpc::experimental::NoOpCertificateVerifier> verifier =
-                    std::make_shared<grpc::experimental::NoOpCertificateVerifier>();
-            topts.set_verify_server_certs(false);
-            topts.set_check_call_host(false);
-            topts.set_certificate_verifier(verifier);
-
-            _channel = grpc::CreateChannel(cpTarget, grpc::experimental::TlsCredentials(topts));
-            _stub = LoadBalancer::NewStub(_channel);
+            _stub = createStub(cpIP, cpPort);
         }
 
 
@@ -390,7 +379,7 @@ using namespace std::chrono;
          * Get the version of the current CP.
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int CpOverview::GetVersion() {
+        int CpOverview::getVersion() {
 
             // Get-version message we are sending to server
             VersionRequest request;
@@ -411,12 +400,39 @@ using namespace std::chrono;
         }
 
 
+        /**
+         * Print out all info obtained from the CP.
+         */
+        void CpOverview::printCpStats(std::ostream& out, std::string& indent) const {
+            if (lbStats.empty()) {
+                out << indent << "No LBs in this CP" << std::endl << std::endl;
+                return;
+            }
+
+            out << indent << "CP @ " << cpAddr << ":" << cpPort << std::endl;
+
+            // indents
+            std::string lbIndent     = indent + "  ";
+            std::string subLbIndent  = indent + "    ";
+            std::string workerIndent = indent + "      ";
+
+            // For each LB in this CP ...
+            for (const auto& pair : lbStats) {
+                const LdBalancer &lb = pair.second;
+                lb.printLbStats(out, lbIndent);
+                out << std::endl;
+            }
+            out << std::endl;
+        }
+
+
+
 
         /**
          * Get overview of entire CP.
          * @return 0 if successful, 1 if error in grpc communication
          */
-        int CpOverview::Overview() {
+        int CpOverview::getUpdate() {
             // Overview request message we are sending to server
             OverviewRequest request;
             OverviewReply reply;
@@ -433,6 +449,8 @@ using namespace std::chrono;
 
             //----------------------------
             // Things returned from CP
+
+            lbStats.clear();
 
             // How many LBs?
             int lbCount = reply.loadbalancers_size();
@@ -455,6 +473,29 @@ using namespace std::chrono;
                 lb.fpgaLbId        = res.fpgalbid();
 
 
+                // Construct the uri's
+                std::stringstream ss;
+
+                if (!lb.dataIpv6Address.empty()) {
+                    ss << "ejfat://" << lb.instanceToken << "@" << cpAddr << ":" << cpPort;
+                    ss << "/lb/" << lb.lbId;
+                    ss << "?data=" << lb.dataIpv6Address << ":19522";
+                    ss << "&sync=" << lb.syncIpAddress << ":" << lb.syncUdpPort;
+                    lb.uri6 = ss.str();
+                }
+
+                if (!lb.dataIpv4Address.empty()) {
+                    ss.str("");  // Clear the content
+                    ss.clear();  // Reset the error state
+
+                    ss << "ejfat://" << lb.instanceToken << "@" << cpAddr << ":" << cpPort;
+                    ss << "/lb/" << lb.lbId;
+                    ss << "?data=" << lb.dataIpv4Address << ":19522";
+                    ss << "&sync=" << lb.syncIpAddress << ":" << lb.syncUdpPort;
+                    lb.uri4 = ss.str();
+                }
+
+
                 auto status = reply.loadbalancers(j).status();
 
                 lb.curEpoch= status.currentepoch();
@@ -467,9 +508,11 @@ using namespace std::chrono;
 
                 for (int i=0; i < workerCount; i++) {
                     auto worker = status.workers(i);
+                    std::string workerName = worker.name();
 
                     // Either returns the entry at this key, or creates one if none exists
-                    auto & stats = lb.clientStats[name];
+                    auto & stats = lb.clientStats[workerName];
+                    stats.name          = workerName;
                     stats.fillPercent   = worker.fillpercent();
                     stats.controlSignal = worker.controlsignal();
                     stats.slotsAssigned = worker.slotsassigned();
@@ -890,7 +933,7 @@ using namespace std::chrono;
          * @param cpPort        control plane TCP port for grpc communication.
          * @param lbName        name to assign this LB.
          * @param adminToken    token used to interact with LB.
-         * @param senders       vector of IP addresses allowed to send to LB.
+         * @param senders       set of IP addresses allowed to send to LB.
          * @param untilSeconds  time (seconds past epoch) at which reservation ends.
          * @param useIPv6       use IP version 6 destination address when constructing
          *                      URI containing info for sending data.
@@ -901,7 +944,7 @@ using namespace std::chrono;
         std::string LbAdmin::ReserveLoadBalancer(const std::string& cpIP, uint16_t cpPort,
                                                  const std::string& lbName,
                                                  const std::string& adminToken,
-                                                 const std::vector<std::string> &senders,
+                                                 const std::set<std::string> &senders,
                                                  int64_t untilSeconds, bool useIPv6) {
 
             auto _stub = createStub(cpIP, cpPort);
