@@ -49,15 +49,27 @@
 #include <arpa/inet.h>
 
 
+
+#include <grpc/grpc.h>
+#include <grpcpp/channel.h>
+#include <grpcpp/client_context.h>
+#include <grpcpp/create_channel.h>
+
+#include <grpcpp/grpcpp.h>
+#include <grpcpp/security/credentials.h>
+#include <grpcpp/security/tls_credentials_options.h>
+#include <openssl/ssl.h>
+
+
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <grpcpp/health_check_service_interface.h>
+
+
 #ifdef __APPLE__
     #include <sys/sysctl.h>
 #endif
 
 #include <google/protobuf/util/time_util.h>
-
-#include <grpcpp/ext/proto_server_reflection_plugin.h>
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/health_check_service_interface.h>
 
 #ifdef BAZEL_BUILD
 #include "examples/protos/loadbalancer.pb.h"
@@ -108,98 +120,6 @@ using loadbalancer::OverviewReply;
 using loadbalancer::Overview;
 
 
-//using google::protobuf::util;
-
-
-
-/** Class to represent a single backend and store its state in the control plane / server. */
-class BackEnd {
-
-    public:
-
-
-    BackEnd(const RegisterRequest* req);
-
-    void update(const SendStateRequest* state);
-    void printBackendState() const;
-
-    const std::string & getAdminToken()    const;
-    const std::string & getInstanceToken() const;
-    const std::string & getSessionId()     const;
-    const std::string & getName()          const;
-    const std::string & getLbId()          const;
-    const std::string & getIpAddress()     const;
-
-    google::protobuf::Timestamp getTimestamp()  const;
-    int64_t  getTime()         const;
-    int64_t  getLocalTime()    const;
-
-    float   getWeight()           const;
-
-    uint32_t getUdpPort()              const;
-    uint32_t getPortRange()            const;
-
-    bool getIsReady()  const;
-    bool getIsActive() const;
-    void setIsActive(bool active);
-
-
-	private:
-
-
-    // Data from CP (reservation and registration)
-
-    /** Administrative token. */
-    std::string adminToken;
-
-    /** LB instance token. */
-    std::string instanceToken;
-
-//    sessionToken as well??
-
-    /** Backend's session ID. */
-    std::string sessionId;
-
-    /** Backend's name. */
-    std::string name;
-
-    /** LB's id. */
-    std::string lbId;
-
-    /** Backend's weight in CP relative to the weight of other backends in this LB's schedule density. */
-    float weight;
-
-    /** Receiving IP address of backend. */
-    std::string  ipAddress;
-
-    /** Receiving UDP port of backend. */
-    uint16_t  udpPort;
-
-    /** Receiving UDP port range of backend. */
-    uint16_t  portRange;
-
-
-    // Data for sending state updates to CP ...
-
-    /** Time in milliseconds past epoch that this data was taken by backend. */
-    google::protobuf::Timestamp timestamp;
-
-    /** Time in milliseconds past epoch that this data was taken by backend.
-     *  Same as timestamp but in different format. */
-    int64_t time = 0;
-
-    /** Local time in milliseconds past epoch corresponding to backend time.
-     *  Hopefully this takes care of time delays and nodes not setting their clocks properly.
-     *  Set locally when SendState msg arrives, this helps find how long ago the backend reported data. */
-    int64_t localTime = 0;
-
-
-    /** Ready to receive more data if true. */
-    bool isReady;
-
-    /** Is active (reported its status on time). */
-    bool isActive;
-};
 
 
 //------------------------------------------------------------------------------------
