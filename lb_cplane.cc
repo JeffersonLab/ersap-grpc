@@ -19,8 +19,8 @@ using namespace std::chrono;
 
         /**
          * Create grpc stub object.
-         * @param cIp       grpc IP address of control plane (dotted decimal format).
-         * @param cPort     grpc port of control plane.
+         * @param cpIP  grpc IP address of control plane (dotted decimal format).
+         * @param cPort grpc port of control plane.
          *
          */
         static std::unique_ptr<LoadBalancer::Stub>
@@ -41,121 +41,6 @@ using namespace std::chrono;
 
             return stub;
         }
-
-
-
-
-
-        //////////////////
-		// BackEnd class
-		/////////////////
-
-
-        /**
-         * Constructor.
-         * @param req registration request from backend.
-         */
-        BackEnd::BackEnd(const RegisterRequest* req) {
-        	name            = req->name();
-        	lbId            = req->lbid();
-        	weight          = req->weight();
-            ipAddress       = req->ipaddress();
-            udpPort         = req->udpport();
-            portRange       = req->portrange();
-        }
-
-
-        /**
-         * Update values.
-         * @state current state used to update this object. 
-         */
-        void BackEnd::update(const SendStateRequest* state) {
-
-            if (state->has_timestamp()) {
-                time = google::protobuf::util::TimeUtil::TimestampToMilliseconds(state->timestamp());
-                timestamp = state->timestamp();
-            }
-
-            // Now record local time
-            localTime = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-
-            sessionId = state->sessionid();
-        }
-
-
-        /** Print out backend status. */
-        void BackEnd::printBackendState() const {
-        	std::cout << "State of "        << name
-                      << " @ t = "          << time
-                      << std::endl;
-       }
-
-
-        /** Get the admin token.
-         *  @return admin token. */
-        const std::string & BackEnd::getAdminToken() const {return adminToken;}
-
-        /** Get the LB's instance token.
-         *  @return LB's instance token. */
-        const std::string & BackEnd::getInstanceToken() const {return instanceToken;}
-
-        /** Get the backend's session ID.
-         *  @return backend's session ID. */
-        const std::string & BackEnd::getSessionId() const {return sessionId;}
-
-        /** Get the backend's name.
-         *  @return backend's name. */
-        const std::string & BackEnd::getName() const {return name;}
-
-        /** Get the LB's id.
-         *  @return LB's id. */
-        const std::string & BackEnd::getLbId() const {return lbId;}
-
-
-        /** Get the timestamp of the latest backend's sent data.
-         *  @return timestamp of the latest backend's sent data. */
-        google::protobuf::Timestamp BackEnd::getTimestamp() const {return timestamp;}
-
-        /** Get the timestamp of the latest backend's sent data.
-         *  @return timestamp of the latest backend's sent data. */
-        int64_t BackEnd::getTime() const {return time;}
-
-        /** Get the locally set timestamp of the arrival of the latest backend's sent data.
-         *  @return locally set timestamp of the arrival of the latest backend's sent data. */
-        int64_t BackEnd::getLocalTime() const {return localTime;}
-
-
-        /** Get the weight of the backend compared to other backends in schedule density.
-         *  @return weight of the backend. */
-        float BackEnd::getWeight() const {return weight;}
-
-
-        /** Get the backend's receiving IP address (dot-decimal).
-         *  @return backend's receiving IP address. */
-        const std::string & BackEnd::getIpAddress() const {return ipAddress;}
-
-        /** Get the backend's receiving UDP port.
-         *  @return backend's receiving UDP port. */
-        uint32_t BackEnd::getUdpPort() const {return udpPort;}
-
-        /** Get the backend's receiving range of udp ports.
-         *  @return backend's receiving range of udp ports. */
-        uint32_t BackEnd::getPortRange() const {return portRange;}
-
-
-        /** Get if backend's ready to receive more data.
-        *  @return true if backend's ready to receive more data. */
-        bool BackEnd::getIsReady() const {return isReady;}
-
-        /** True if backend is actively sending data updates.
-        *  @return true if backend is actively sending data updates. */
-        bool BackEnd::getIsActive() const {return isActive;}
-
-
-        /** True if backend is actively sending data updates.
-         *  @param active true if backend is actively sending data updates, else false. */
-        void BackEnd::setIsActive(bool active) {isActive = active;}
-
 
 
         
