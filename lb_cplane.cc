@@ -294,7 +294,7 @@ using namespace std::chrono;
                 return;
             }
 
-            out << indent << "CP @ " << cpAddr << ":" << cpPort << std::endl;
+            out << indent << "CP @ " << cpAddr << ":" << cpPort << std::endl << std::endl;
 
             // indents
             std::string lbIndent     = indent + "  ";
@@ -337,6 +337,8 @@ using namespace std::chrono;
 
             lbStats.clear();
 
+            std::stringstream ss;
+
             // How many LBs?
             int lbCount = reply.loadbalancers_size();
 
@@ -359,9 +361,11 @@ using namespace std::chrono;
 
 
                 // Construct the uri's
-                std::stringstream ss;
 
                 if (!lb.dataIpv6Address.empty()) {
+                    ss.str("");  // Clear the content
+                    ss.clear();  // Reset the error state
+
                     ss << "ejfat://" << lb.instanceToken << "@" << cpAddr << ":" << cpPort;
                     ss << "/lb/" << lb.lbId;
                     ss << "?data=" << lb.dataIpv6Address << ":19522";
@@ -383,10 +387,32 @@ using namespace std::chrono;
 
                 auto status = reply.loadbalancers(j).status();
 
-                lb.curEpoch= status.currentepoch();
+                lb.curEpoch = status.currentepoch();
                 lb.curPredictedEventNum = status.currentpredictedeventnumber();
                 lb.expiresAt = status.expiresat();
-                lb.expireAtSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+                lb.expireAtMilliSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+
+                // Convert msec to seconds
+                time_t seconds = lb.expireAtMilliSeconds / 1000;
+
+                // Create a struct to hold the local time
+                struct tm *local_time = localtime(&seconds);
+
+                ss.str("");  // Clear the content
+                ss.clear();  // Reset the error state
+
+                // The formatted date and time
+                ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+                lb.expireAtString = ss.str();
+
+
+                int senderCount = status.senderaddresses_size();
+                lb.curSenders.clear();
+
+                for (int i=0; i < senderCount; i++) {
+                    std::string addr = status.senderaddresses(i);
+                    lb.curSenders.insert(addr);
+                }
 
 
                 int workerCount = status.workers_size();
@@ -403,6 +429,19 @@ using namespace std::chrono;
                     stats.slotsAssigned = worker.slotsassigned();
                     stats.lastUpdated   = worker.lastupdated();
                     stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
+
+                    // Convert msec to seconds
+                    time_t seconds = stats.updateTime/1000;
+
+                    // Create a struct to hold the local time
+                    struct tm *local_time = localtime(&seconds);
+
+                    ss.str("");  // Clear the content
+                    ss.clear();  // Reset the error state
+
+                    // The formatted date and time
+                    ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+                    stats.updateTimeString = ss.str();
                 }
 
                 // put lb somewhere
@@ -481,6 +520,7 @@ using namespace std::chrono;
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
                 request.add_senderaddresses(s);
                 validSenders.insert(s);
@@ -566,6 +606,7 @@ using namespace std::chrono;
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
 
                 // Check if already in sender set
@@ -620,6 +661,7 @@ using namespace std::chrono;
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
 
                 // Attempt to remove a sender
@@ -706,11 +748,27 @@ using namespace std::chrono;
 
             //----------------------------
             // Things returned from CP
+
+            std::stringstream ss;
+
             lb.curEpoch = reply.currentepoch();
             lb.curPredictedEventNum = reply.currentpredictedeventnumber();
 
             lb.expiresAt = reply.expiresat();
-            lb.expireAtSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+            lb.expireAtMilliSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
+
+            // Convert msec to seconds
+            time_t seconds = lb.expireAtMilliSeconds / 1000;
+
+            // Create a struct to hold the local time
+            struct tm *local_time = localtime(&seconds);
+
+            ss.str("");  // Clear the content
+            ss.clear();  // Reset the error state
+
+            // The formatted date and time
+            ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+            lb.expireAtString = ss.str();
 
             // How many senders?
             int senderCount = reply.senderaddresses_size();
@@ -733,6 +791,15 @@ using namespace std::chrono;
                 stats.slotsAssigned = reply.workers(j).slotsassigned();
                 stats.lastUpdated   = reply.workers(j).lastupdated();
                 stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
+
+                time_t seconds = stats.updateTime / 1000;
+                struct tm *local_time = localtime(&seconds);
+
+                ss.str("");  // Clear the content
+                ss.clear();  // Reset the error state
+
+                ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+                stats.updateTimeString = ss.str();
             }
 
             return 0;
@@ -853,6 +920,7 @@ using namespace std::chrono;
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
                 request.add_senderaddresses(s);
             }
@@ -942,10 +1010,12 @@ using namespace std::chrono;
             // Add sender IP addresses, check validity
             for (auto s : senders) {
                 try {
+                    std::cout << "adding addr " << s << std::endl;
                     boost::asio::ip::make_address(s);
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
 
                 request.add_senderaddresses(s);
@@ -998,6 +1068,7 @@ using namespace std::chrono;
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
+                    continue;
                 }
 
                 request.add_senderaddresses(s);
@@ -1102,6 +1173,8 @@ using namespace std::chrono;
 
             // Things returned from CP
 
+            std::stringstream ss;
+
             // How many clients on this LB?
             int clientCount = reply.workers_size();
 
@@ -1114,7 +1187,20 @@ using namespace std::chrono;
                 stats.controlSignal = reply.workers(j).controlsignal();
                 stats.slotsAssigned = reply.workers(j).slotsassigned();
                 stats.lastUpdated   = reply.workers(j).lastupdated();
-                stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated);
+                stats.updateTime = google::protobuf::util::TimeUtil::TimestampToMilliseconds(stats.lastUpdated) / 1000;
+
+                // Convert msec to sec
+                time_t seconds = stats.updateTime / 1000;
+
+                // Create a struct to hold the local time
+                struct tm *local_time = localtime(&seconds);
+
+                ss.str("");  // Clear the content
+                ss.clear();  // Reset the error state
+
+                // The formatted date and time
+                ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+                stats.updateTimeString = ss.str();
             }
 
             return 0;

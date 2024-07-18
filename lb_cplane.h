@@ -43,11 +43,12 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <regex>
+#include <iomanip>
+#include <ctime>
 
 #include <cstring>
 #include <netdb.h>
 #include <arpa/inet.h>
-
 
 
 #include <grpc/grpc.h>
@@ -254,13 +255,16 @@ public:
      *  Same as "lastUpdated" but in different format. */
     int64_t updateTime;
 
+    /** Human readable date and time of updateTime. */
+    std::string updateTimeString;
+
 
     void printClientStats(std::ostream& out, std::string& indent) const {
-        out << indent << "name :           " << name << std::endl;
-        out << indent << "fill % :         " << fillPercent << std::endl;
-        out << indent << "control sig :    " << controlSignal << std::endl;
+        out << indent << "name           : " << name << std::endl;
+        out << indent << "fill %         : " << fillPercent << std::endl;
+        out << indent << "control sig    : " << controlSignal << std::endl;
         out << indent << "slots assigned : " << slotsAssigned << std::endl;
-        out << indent << "update time :    " << updateTime << std::endl;
+        out << indent << "update time    : " << updateTimeString << std::endl;
     }
 
 };
@@ -305,11 +309,11 @@ public:
         return false;
     };
 
-    const std::set<std::string> & getSenders() const {return senders;}
+    const std::set<std::string> & getSenders() const {return curSenders;}
 
 
     // From LoadBalancerStatusReply msg
-    int64_t  getExpiresAt()    const {return expireAtSeconds;}
+    int64_t  getExpiresAt()    const {return expireAtMilliSeconds;}
     uint64_t getCurrentEpoch() const {return curEpoch;}
     uint64_t getPredictedEventNumber() const {return curPredictedEventNum;}
     const std::set<std::string> & getCurSenders() const {return curSenders;}
@@ -323,34 +327,36 @@ public:
         std::string workerIndent = indent + "    ";
 
 
-        out << indent << "LB_id " << lbId << "(" << name << "):" << std::endl;
-        out << subLbIndent << "fpga id: " << fpgaLbId << std::endl << std::endl;
-        out << subLbIndent << "token: " << instanceToken << std::endl;
-        out << subLbIndent << "sync addr: " << syncIpAddress << std::endl;
-        out << subLbIndent << "sync port: " << syncUdpPort << std::endl;
+        out << indent << "LB_id " << lbId << " (name = " << name << "):" << std::endl;
+        out << subLbIndent << "fpga id     : " << fpgaLbId << std::endl << std::endl;
+        out << subLbIndent << "token       : " << instanceToken << std::endl;
+        out << subLbIndent << "sync addr   : " << syncIpAddress << std::endl;
+        out << subLbIndent << "sync port   : " << syncUdpPort << std::endl;
 
         if (!dataIpv4Address.empty()) {
-            out << subLbIndent << "data ipv4 addr: " << dataIpv4Address << std::endl;
-            out << subLbIndent << "uri (ipv4): " << uri4 << std::endl;
+            out << subLbIndent << "data addr 4 : " << dataIpv4Address << std::endl;
+            out << subLbIndent << "uri (ipv4)  : " << uri4 << std::endl;
         }
         if (!dataIpv6Address.empty()) {
-            out << subLbIndent << "data ipv6 addr: " << dataIpv6Address << std::endl;
-            out << subLbIndent << "uri (ipv6): " << uri6 << std::endl;
+            out << subLbIndent << "data addr 6 : " << dataIpv6Address << std::endl;
+            out << subLbIndent << "uri (ipv6)  : " << uri6 << std::endl;
         }
 
 
-        out << subLbIndent << "epoch: " << curEpoch << std::endl;
-        out << subLbIndent << "predicted event#: " << curPredictedEventNum << std::endl;
-        out << subLbIndent << "expire at sec: " << expireAtSeconds << std::endl << std::endl;
+        out << subLbIndent << "epoch       : " << curEpoch << std::endl;
+        out << subLbIndent << "predict ev# : " << curPredictedEventNum << std::endl;
+        out << subLbIndent << "            : " << std::hex << std::showbase << curPredictedEventNum << std::dec << std::endl;
+        out << subLbIndent << "expire at   : " << expireAtString << std::endl;
+        out << subLbIndent << "            : " << std::hex << std::showbase << expireAtMilliSeconds << std::dec << std::endl << std::endl;
 
-        out << subLbIndent << "senders: " << std::endl;
+        out << subLbIndent << "senders     : " << std::endl;
         for (const std::string sender : curSenders) {
             out << workerIndent << sender << std::endl;
         }
 
         out << std::endl;
 
-        out << subLbIndent << "clients: " << std::endl;
+        out << subLbIndent << "clients     : " << std::endl;
         for (const auto& workPair : clientStats) {
             const LbClientStatus &stats = workPair.second;
             stats.printClientStats(out, workerIndent);
@@ -371,7 +377,7 @@ private:
      *  Same as "until" but in different format. */
     int64_t untilSeconds;
 
-    /** Contains approved data senders. */
+    /** Contains data senders given in the reserve-LB command. Not really used. */
     std::set<std::string> senders;
 
     /** Construct the IPv4 uri for reference. */
@@ -417,10 +423,13 @@ private:
     /** Time LB reservation will expire. */
     google::protobuf::Timestamp expiresAt;
 
-    /** "expiresAt" in seconds past epoch. */
-    int64_t expireAtSeconds;
+    /** "expiresAt" in milliseconds past epoch. */
+    int64_t expireAtMilliSeconds;
 
-    /** Contains data senders currently recognized. */
+    /** Human readable date and time of expiration (second resolution) . */
+    std::string expireAtString;
+
+    /** Contains data senders currently recognized by CP. */
     std::set<std::string> curSenders;
 
     /** Map used to store stats on LB clients.
