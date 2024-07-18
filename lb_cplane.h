@@ -328,7 +328,7 @@ public:
 
 
         out << indent << "LB_id " << lbId << " (name = " << name << "):" << std::endl;
-        out << subLbIndent << "fpga id     : " << fpgaLbId << std::endl << std::endl;
+        out << subLbIndent << "fpga id     : " << fpgaLbId << std::endl;
         out << subLbIndent << "token       : " << instanceToken << std::endl;
         out << subLbIndent << "sync addr   : " << syncIpAddress << std::endl;
         out << subLbIndent << "sync port   : " << syncUdpPort << std::endl;
