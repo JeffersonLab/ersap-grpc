@@ -347,7 +347,8 @@ public:
         out << subLbIndent << "predict ev# : " << curPredictedEventNum << std::endl;
         out << subLbIndent << "            : " << std::hex << std::showbase << curPredictedEventNum << std::dec << std::endl;
         out << subLbIndent << "expire at   : " << expireAtString << std::endl;
-        out << subLbIndent << "            : " << std::hex << std::showbase << expireAtMilliSeconds << std::dec << std::endl << std::endl;
+        out << subLbIndent << "            : " << std::hex << std::showbase << expireAtMilliSeconds << std::dec << std::endl;
+        out << subLbIndent << "update time : " << timeSent << std::endl << std::endl;
 
         out << subLbIndent << "senders : " << std::endl;
         for (const std::string sender : curSenders) {
@@ -428,6 +429,9 @@ private:
 
     /** Human readable date and time of expiration (second resolution) . */
     std::string expireAtString;
+
+    /** Human readable date and time of time reply sent . */
+    std::string timeSent;
 
     /** Contains data senders currently recognized by CP. */
     std::set<std::string> curSenders;

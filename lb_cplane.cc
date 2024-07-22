@@ -389,6 +389,9 @@ using namespace std::chrono;
 
                 lb.curEpoch = status.currentepoch();
                 lb.curPredictedEventNum = status.currentpredictedeventnumber();
+
+
+
                 lb.expiresAt = status.expiresat();
                 lb.expireAtMilliSeconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(lb.expiresAt);
 
@@ -404,6 +407,17 @@ using namespace std::chrono;
                 // The formatted date and time
                 ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
                 lb.expireAtString = ss.str();
+
+
+
+                // Time reply sent
+                seconds = google::protobuf::util::TimeUtil::TimestampToMilliseconds(status.timestamp()) / 1000;
+                local_time = localtime(&seconds);
+                ss.str("");
+                ss.clear();
+                ss << std::put_time(local_time, "%Y-%m-%d %H:%M:%S");
+                lb.timeSent = ss.str();
+
 
 
                 int senderCount = status.senderaddresses_size();
