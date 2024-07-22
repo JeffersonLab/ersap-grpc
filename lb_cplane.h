@@ -349,14 +349,14 @@ public:
         out << subLbIndent << "expire at   : " << expireAtString << std::endl;
         out << subLbIndent << "            : " << std::hex << std::showbase << expireAtMilliSeconds << std::dec << std::endl << std::endl;
 
-        out << subLbIndent << "senders     : " << std::endl;
+        out << subLbIndent << "senders : " << std::endl;
         for (const std::string sender : curSenders) {
             out << workerIndent << sender << std::endl;
         }
 
         out << std::endl;
 
-        out << subLbIndent << "clients     : " << std::endl;
+        out << subLbIndent << "clients : " << std::endl;
         for (const auto& workPair : clientStats) {
             const LbClientStatus &stats = workPair.second;
             stats.printClientStats(out, workerIndent);

@@ -1010,7 +1010,6 @@ using namespace std::chrono;
             // Add sender IP addresses, check validity
             for (auto s : senders) {
                 try {
-                    std::cout << "adding addr " << s << std::endl;
                     boost::asio::ip::make_address(s);
                 }
                 catch (const boost::system::system_error& e) {
