@@ -83,7 +83,6 @@ X pid(                      // Proportional, Integrative, Derivative Controller
 // Using a mutex to change the fifo fill level is similar to the mechanism
 // that the ET-fifo system code works when inserting and removing items.
 //-----------------------------------------------------------------------
-static uint32_t fifoLevel;
 static std::mutex fifoMutex;
 static std::condition_variable fifoCV;
 
@@ -867,7 +866,7 @@ static void *drainFifoThread(void *arg) {
             fprintf(fp, "Thd %d: pkt delay %u usec, %u total pkts, arrival sequence:\n", id, delay, totalPkts);
 
             uint32_t seq;
-            for (int i=0; i < totalPkts; i++) {
+            for (int i=0; i < (int)totalPkts; i++) {
                 seq = buf[12 + 4*i];
                 fprintf(fp, " %u", seq);
             }
@@ -1019,7 +1018,6 @@ static void *rateThread(void *arg) {
 
 int main(int argc, char **argv) {
 
-    ssize_t nBytes;
     uint32_t bufSize = 150000; // 150kB default
     int cores[10];
 
@@ -1294,7 +1292,7 @@ int main(int argc, char **argv) {
     ///    Start Drain Threads     ///
     //////////////////////////////////
 
-    for (int i=0; i < processThds; i++) {
+    for (int i=0; i < (int)processThds; i++) {
         pthread_t thdDrain;
         status = pthread_create(&thdDrain, NULL, drainFifoThread, (void *) targ);
         if (status != 0) {
@@ -1354,11 +1352,11 @@ int main(int argc, char **argv) {
     fprintf(fp, "reportTime = %u msec, sampleTime = %u microsec, loopMax = %d, loopCount = %d\n", reportTime, sampleTime, loopMax, loopCount);
 
     // Keep a running avg of fifo fill over fcount samples
-    float runningFillTotal = 0., fillAvg;
+    float runningFillTotal = 0., fillAvg = 0.F;
     float fillValues[fcount];
     memset(fillValues, 0, fcount*sizeof(float));
     // Keep circulating thru array. Highest index is fcount - 1.
-    float prevFill, curFill, fillPercent;
+    float prevFill, curFill = 0.F, fillPercent = 0.F;
 
 
     // Alternatively keep a running avg of the incoming event rate normalized to max event processing rate
@@ -1368,7 +1366,7 @@ int main(int argc, char **argv) {
     int64_t prevEvCount, curEvCount;
     // set first and last indexes right here
     int currentIndex = 0, earliestIndex = 1;
-    float evRateAvg, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
+    float evRateAvg = 0.F, relEvRate = 0.F;   // Incoming event rate / max EPR = relative event rate
 
     // time stuff
     struct timespec t1, t2;
@@ -1376,11 +1374,11 @@ int main(int argc, char **argv) {
     int64_t totalTimeGoal = sampleTime * fcount;
     int64_t times[fcount];
     float deltaT; // "time" in secs
-    int64_t absTime, prevAbsTime, prevFifoTime;
+    int64_t absTime;
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    prevFifoTime = prevAbsTime = 1000000L*(t1.tv_sec) + (t1.tv_nsec)/1000L; // microsec epoch time
+    int64_t prevAbsTime = 1000000L*(t1.tv_sec) + (t1.tv_nsec)/1000L; // microsec epoch time
     // Load times with current time for more accurate first round of rates
-    for (int i=0; i < fcount; i++) {
+    for (int i=0; i < (int)fcount; i++) {
         times[i] = prevAbsTime;
     }
 
@@ -1466,10 +1464,10 @@ int main(int argc, char **argv) {
 
         // Set indexes for next round
         earliestIndex++;
-        earliestIndex = (earliestIndex == fcount) ? 0 : earliestIndex;
+        earliestIndex = (earliestIndex == (int)fcount) ? 0 : earliestIndex;
 
         currentIndex++;
-        currentIndex = (currentIndex == fcount) ? 0 : currentIndex;
+        currentIndex = (currentIndex == (int)fcount) ? 0 : currentIndex;
 
         if (currentIndex == 0) {
             // Use totalTime to adjust the effective sampleTime so that we really do sample

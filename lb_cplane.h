@@ -92,20 +92,17 @@ using grpc::CompletionQueue;
 using grpc::ServerAsyncResponseWriter;
 
 using loadbalancer::PortRange;
-using loadbalancer::FreeLoadBalancerRequest;
-using loadbalancer::FreeLoadBalancerReply;
+using loadbalancer::LoadBalancer;
+
 using loadbalancer::ReserveLoadBalancerRequest;
 using loadbalancer::ReserveLoadBalancerReply;
+using loadbalancer::GetLoadBalancerRequest;
+
 using loadbalancer::LoadBalancerStatusRequest;
 using loadbalancer::LoadBalancerStatusReply;
-using loadbalancer::LoadBalancer;
-using loadbalancer::RegisterRequest;
-using loadbalancer::DeregisterRequest;
-using loadbalancer::SendStateRequest;
-using loadbalancer::RegisterReply;
-using loadbalancer::DeregisterReply;
-using loadbalancer::SendStateReply;
-using loadbalancer::GetLoadBalancerRequest;
+
+using loadbalancer::FreeLoadBalancerRequest;
+using loadbalancer::FreeLoadBalancerReply;
 
 using loadbalancer::AddSendersRequest;
 using loadbalancer::AddSendersReply;
@@ -113,12 +110,21 @@ using loadbalancer::AddSendersReply;
 using loadbalancer::RemoveSendersRequest;
 using loadbalancer::RemoveSendersReply;
 
-using loadbalancer::VersionRequest;
-using loadbalancer::VersionReply;
+using loadbalancer::RegisterRequest;
+using loadbalancer::RegisterReply;
+
+using loadbalancer::DeregisterRequest;
+using loadbalancer::DeregisterReply;
+
+using loadbalancer::SendStateRequest;
+using loadbalancer::SendStateReply;
 
 using loadbalancer::OverviewRequest;
 using loadbalancer::OverviewReply;
-using loadbalancer::Overview;
+
+using loadbalancer::VersionRequest;
+using loadbalancer::VersionReply;
+
 
 
 
@@ -161,8 +167,8 @@ class LbControlPlaneClient {
         bool      getIsReady()          const;
 
 
-  
-    private:
+
+private:
 
     /** Object used to call backend's grpc API routines. */
     std::unique_ptr<LoadBalancer::Stub> _stub;
@@ -176,19 +182,6 @@ class LbControlPlaneClient {
 
     // Used to register with control plane
 
-    /** Token (either admin or instance) used to register. */
-    std::string token;
-
-    /** Client/backend/caller's name. */
-    std::string name;
-
-    /** LB's id. */
-    std::string lbId;
-
-    /** Backend's weight in CP relative to the weight of other
-     * backends in this LB's schedule density. */
-    float weight;
-
     /** This backend client's data-receiving IP addr. */
     std::string beAddr;
 
@@ -197,6 +190,20 @@ class LbControlPlaneClient {
 
     /** This backend client's data-receiving port range. */
     PortRange beRange;
+
+    /** Client/backend/caller's name. */
+    std::string name;
+
+    /** Token (either admin or instance) used to register. */
+    std::string token;
+
+    /** LB's id. */
+    std::string lbId;
+
+    /** Backend's weight in CP relative to the weight of other
+     * backends in this LB's schedule density. */
+    float weight;
+
 
     /** This factor is multiplied with the number of scheduling slots that
      *  would be assigned evenly, to determine min number of slots. For example,

@@ -343,7 +343,7 @@ using namespace std::chrono;
             int lbCount = reply.loadbalancers_size();
 
             // For each LB in this CP ...
-            for (size_t j = 0; j < lbCount; j++) {
+            for (int j = 0; j < lbCount; j++) {
                 std::string name = reply.loadbalancers(j).name();
 
                 auto res = reply.loadbalancers(j).reservation();
@@ -787,7 +787,7 @@ using namespace std::chrono;
             // How many senders?
             int senderCount = reply.senderaddresses_size();
             lb.curSenders.clear();
-            for (size_t j = 0; j < senderCount; j++) {
+            for (int j = 0; j < senderCount; j++) {
                 lb.curSenders.insert(reply.senderaddresses(j));
             }
 
@@ -795,7 +795,7 @@ using namespace std::chrono;
             int clientCount = reply.workers_size();
             lb.clientStats.clear();
 
-            for (size_t j = 0; j < clientCount; j++) {
+            for (int j = 0; j < clientCount; j++) {
                 std::string name = reply.workers(j).name();
 
                 // Either returns the entry at this key, or creates one if none exists
@@ -937,6 +937,7 @@ using namespace std::chrono;
                     continue;
                 }
                 request.add_senderaddresses(s);
+//std::cerr << "Include sender " << s << " when requesting LB" << std::endl;
             }
 
             // Container for the response we expect from server
@@ -956,7 +957,7 @@ using namespace std::chrono;
             if (!(is_ipv4(cpIP) || is_ipv6(cpIP))) {
                 std::string ipV4, ipV6;
                 // convert to dot decimal
-                bool ran = resolve_host(cpIP, ipV4, ipV6);
+                resolve_host(cpIP, ipV4, ipV6);
 
                 if (useIPv6 && !ipV6.empty()) {
 //std::cerr << "Converted " << cpIP << " into v6 " << ipV6 << std::endl;
@@ -1191,7 +1192,7 @@ using namespace std::chrono;
             // How many clients on this LB?
             int clientCount = reply.workers_size();
 
-            for (size_t j = 0; j < clientCount; j++) {
+            for (int j = 0; j < clientCount; j++) {
                 std::string name = reply.workers(j).name();
 
                 // Either returns the entry at this key, or creates one if none exists
@@ -1263,7 +1264,7 @@ using namespace std::chrono;
             if (!(is_ipv4(cpIP) || is_ipv6(cpIP))) {
                 std::string ipV4, ipV6;
                 // convert to dot decimal
-                bool ran = resolve_host(cpIP, ipV4, ipV6);
+                resolve_host(cpIP, ipV4, ipV6);
 
                 if (useIPv6 && !ipV6.empty()) {
 //std::cerr << "Converted " << cpIP << " into v6 " << ipV6 << std::endl;
