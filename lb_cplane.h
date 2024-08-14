@@ -121,6 +121,7 @@ using loadbalancer::SendStateReply;
 
 using loadbalancer::OverviewRequest;
 using loadbalancer::OverviewReply;
+using loadbalancer::Overview;
 
 using loadbalancer::VersionRequest;
 using loadbalancer::VersionReply;
