@@ -565,7 +565,7 @@ extern int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen,
         * this method if desired.
         * </p>
         *
-        * @param dataBuf           place to store assembled packets.
+        * @param vec               place to store assembled packets.
         * @param bufLen            byte length of dataBuf.
         * @param udpSocket         UDP socket to read.
         * @param debug             turn debug printout on & off.
