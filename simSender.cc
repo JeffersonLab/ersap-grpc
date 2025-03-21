@@ -88,7 +88,7 @@ static void printHelp(char *programName) {
             "        [-cpport <control plane sync msg port (default 19523)>]\n",
 
             "        [-i <outgoing interface name (e.g. eth0, currently only used to find MTU)>]",
-            "        [-mtu <desired MTU size>]",
+            "        [-mtu <desired MTU size, 9000 default>]",
             "        [-t <tick>]",
             "        [-ver <version>]",
             "        [-id <data id>]",
@@ -258,7 +258,11 @@ static void parseArgs(int argc, char **argv, int* mtu, int *protocol,
                 // MTU
                 i_tmp = (int) strtol(optarg, nullptr, 0);
                 if (i_tmp < 100) {
-                    fprintf(stderr, "Invalid argument to -mtu. MTU buffer size must be > 100\n");
+                    fprintf(stderr, "Invalid argument to -mtu. MTU must be >= 100\n");
+                    exit(-1);
+                }
+                else if (i_tmp > 9000) {
+                    fprintf(stderr, "Invalid argument to -mtu. MTU must be <= 9000\n");
                     exit(-1);
                 }
                 *mtu = i_tmp;
@@ -634,7 +638,7 @@ int main(int argc, char **argv) {
     uint16_t port = 0x4c42, cpport = 0x4c43; // 19522 & 19523
     uint64_t tick = 0;
     int cores[10];
-    int mtu, version = 2, protocol = 1, entropy = 0;
+    int mtu=9000, version = 2, protocol = 1, entropy = 0;
     uint16_t dataId = 1;
     bool debug = false;
     bool useIPv6 = false, useExpDist = false;
@@ -716,18 +720,6 @@ int main(int argc, char **argv) {
     // Do we use gaussian distribution of interarrival times?
     if (delayWidth > 0) {
         useDelaySpread = true;
-    }
-
-    // Break data into multiple packets of max MTU size.
-    // If the mtu was not set on the command line, get it progamatically
-    if (mtu == 0) {
-        mtu = getMTU(interface, true);
-    }
-
-    // Jumbo (> 1500) ethernet frames are 9000 bytes max.
-    // Don't exceed this limit.
-    if (mtu > 9000) {
-        mtu = 9000;
     }
 
     fprintf(stderr, "Using MTU = %d\n", mtu);
