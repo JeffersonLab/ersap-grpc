@@ -78,7 +78,11 @@
 #include "loadbalancer.grpc.pb.h"
 #endif
 
-#include <boost/asio.hpp>
+#ifdef USE_STANDALONE_ASIO
+    #include "asio.hpp"
+#else
+    #include "boost/asio.hpp"
+#endif
 #include <boost/system/system_error.hpp>
 
 using grpc::Channel;

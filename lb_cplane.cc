@@ -530,7 +530,11 @@ using namespace std::chrono;
 
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
@@ -616,7 +620,11 @@ using namespace std::chrono;
             int senderCount = 0;
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
@@ -671,7 +679,11 @@ using namespace std::chrono;
             int senderCount = 0;
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
@@ -930,7 +942,11 @@ using namespace std::chrono;
             // add sender IP addresses, but check they are valid
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
@@ -1025,7 +1041,11 @@ using namespace std::chrono;
             // Add sender IP addresses, check validity
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
@@ -1078,7 +1098,11 @@ using namespace std::chrono;
             // Remove sender IP addresses, check validity
             for (auto s : senders) {
                 try {
+#ifdef USE_STANDALONE_ASIO
+                    asio::ip::make_address(s);
+#else
                     boost::asio::ip::make_address(s);
+#endif
                 }
                 catch (const boost::system::system_error& e) {
                     std::cout << "skip bad ip addr, " << s << std::endl;
